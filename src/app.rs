@@ -405,6 +405,8 @@ impl App {
                     return;
                 }
             }
+        }
+        if self.view == View::Options {
             if let Some(op) = &self.options {
                 if op.editing {
                     self.options_handle_text(code);
@@ -1058,6 +1060,11 @@ impl App {
     /// Drain detected-but-undispatched notification events (test support).
     pub fn test_take_pending(&mut self) -> Vec<crate::notify::NotifyEvent> {
         std::mem::take(&mut self.pending_notifications)
+    }
+
+    /// Read-only options state access (test support).
+    pub fn options_ref(&self) -> Option<&OptionsState> {
+        self.options.as_ref()
     }
 
     /// Open the options view with given working settings (test support).

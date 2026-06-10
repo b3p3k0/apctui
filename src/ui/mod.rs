@@ -95,7 +95,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
             View::Services => "up/dn select  r restart  S start  x stop  e enable  d disable  R rescan  esc back",
             View::ClientGen => "tab unit  up/dn field  enter edit  w write bundle  esc back",
             View::Events => "up/dn scroll  r reload  esc back",
-            View::Options => "up/dn field  enter/space edit  t test  s save  esc back",
+            View::Options => "up/dn field  enter edit/toggle  t test  s save  esc back",
             View::Help => "esc close",
         }
     } else {
@@ -106,7 +106,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
             View::Services => "↑↓ select  r restart  S start  x stop  e enable  d disable  R rescan  esc back",
             View::ClientGen => "⇥ unit  ↑↓ field  ↵ edit  w write bundle  esc back",
             View::Events => "↑↓ scroll  r reload  esc back",
-            View::Options => "↑↓ field  ↵/space edit  t test  s save  esc back",
+            View::Options => "↑↓ field  ↵ edit/toggle  t test  s save  esc back",
             View::Help => "esc close",
         }
     };

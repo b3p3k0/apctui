@@ -34,3 +34,4 @@ perf.data*
 flamegraph.svg
 core
 vgcore.*
+/patches/

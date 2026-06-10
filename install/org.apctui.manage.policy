@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>apctui</vendor>
+  <vendor_url>https://github.com/your/apctui</vendor_url>
+
+  <!--
+    apctui re-invokes its own binary as root via pkexec to apply config
+    changes and control apcupsd services. This single action covers both,
+    since the binary itself re-validates and restricts what it will do
+    (only writes /etc/apcupsd/*.conf and runs systemctl on apcupsd@* units).
+  -->
+  <action id="org.apctui.manage">
+    <description>Manage apcupsd configuration and services</description>
+    <message>Authentication is required to change apcupsd settings</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/local/bin/apctui</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+  </action>
+</policyconfig>

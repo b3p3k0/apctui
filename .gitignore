@@ -1,0 +1,36 @@
+# ---- build output ----
+/target/
+
+# Cargo.lock is intentionally NOT ignored: apctui is a binary application,
+# so the lockfile is committed for reproducible builds.
+
+# ---- packaging artifacts ----
+*.tar.gz
+*.deb
+
+# ---- backups & editor litter ----
+*~
+*.bak
+*.bak-*
+*.orig
+*.rej
+*.swp
+*.swo
+\#*\#
+.\#*
+
+# ---- IDE / tooling state ----
+.idea/
+.vscode/
+*.iml
+
+# ---- OS junk ----
+.DS_Store
+Thumbs.db
+
+# ---- profiling / debug artifacts ----
+*.profraw
+perf.data*
+flamegraph.svg
+core
+vgcore.*

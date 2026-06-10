@@ -1,0 +1,21 @@
+# apctui config — copy to ~/.config/apctui/config.toml
+# One [[ups]] block per unit; addr is the apcupsd NIS endpoint.
+
+[[ups]]
+name = "rack-main"
+addr = "127.0.0.1:3551"
+
+[[ups]]
+name = "rack-aux"
+addr = "127.0.0.1:3552"
+
+# scales to 4+ units; remote hosts work too:
+# [[ups]]
+# name = "closet"
+# addr = "192.168.1.40:3551"
+
+# Hide specific auto-discovered instances from the dashboard (they remain
+# visible in the services view). Only applies when no [[ups]] entries above
+# are active.
+# [discovery]
+# ignore = ["closet-test"]

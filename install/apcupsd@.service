@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Instanced apcupsd unit installed by apctui's install.sh.
+# Each UPS gets its own config: /etc/apcupsd/<instance>.conf
+[Unit]
+Description=APC UPS daemon (%i)
+Documentation=man:apcupsd(8)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# -b: stay in foreground (systemd supervises)
+ExecStart=/sbin/apcupsd -b -f /etc/apcupsd/%i.conf -P /run/apcupsd/%i.pid
+RuntimeDirectory=apcupsd
+RuntimeDirectoryPreserve=yes
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

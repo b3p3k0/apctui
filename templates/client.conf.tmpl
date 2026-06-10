@@ -1,0 +1,28 @@
+## apcupsd CLIENT config — generated template (apctui)
+##
+## Install on a machine that draws power from a UPS managed by the apctui
+## host. The client polls the server's NIS and shuts itself down on low
+## battery. Replace {{MASTER_ADDR}} (e.g. 192.168.1.10:3551) and {{UPS_NAME}}.
+##
+## Deploy:
+##   apt install apcupsd
+##   scp this file -> /etc/apcupsd/apcupsd.conf
+##   systemctl enable --now apcupsd
+##
+## Ordering note: clients must finish shutting down BEFORE the server host
+## powers off / the UPS cuts output. These thresholds are deliberately more
+## conservative than the server's (server: BATTERYLEVEL 10 / MINUTES 5).
+
+UPSNAME {{UPS_NAME}}
+UPSCABLE ether
+UPSTYPE net
+DEVICE {{MASTER_ADDR}}
+POLLTIME 10
+
+# shut down earlier than the server does
+BATTERYLEVEL 15
+MINUTES 8
+TIMEOUT 0
+
+# a client does not need to serve NIS; keep it off unless you chain monitors
+NETSERVER off

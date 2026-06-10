@@ -5,6 +5,7 @@ edition = "2021"
 rust-version = "1.85"
 description = "Slick TUI monitor & manager for apcupsd — multi-UPS aware"
 license = "GPL-3.0-or-later"
+repository = "https://github.com/b3p3k0/apctui"
 keywords = ["apcupsd", "ups", "tui", "monitor"]
 categories = ["command-line-utilities"]
 

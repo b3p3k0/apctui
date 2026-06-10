@@ -86,7 +86,8 @@ impl CooldownGate {
 /// Outcome reports from the worker, for toasting.
 #[derive(Debug, Clone)]
 pub enum NotifyStatus {
-    Sent(EventKind),
+    /// Delivered; carries the push title for on-screen confirmation.
+    Sent(String),
     Failed(String),
 }
 
@@ -171,7 +172,7 @@ fn worker(
                 "body": body,
             }));
         let report = match resp {
-            Ok(_) => NotifyStatus::Sent(ev.kind),
+            Ok(_) => NotifyStatus::Sent(title.clone()),
             Err(ureq::Error::Status(code, _)) => {
                 NotifyStatus::Failed(format!("pushbullet: HTTP {code}"))
             }
@@ -294,7 +295,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             let st = n.poll_status();
-            if st.iter().any(|s| matches!(s, NotifyStatus::Sent(EventKind::OnBattery))) {
+            if st.iter().any(|s| matches!(s, NotifyStatus::Sent(t) if t.contains("ON BATTERY"))) {
                 break;
             }
             assert!(Instant::now() < deadline, "no Sent status within 5s");

@@ -266,6 +266,29 @@ impl App {
                 push_hist(&mut panel.batt_hist, batt.round() as u64);
 
                 // -------- notification detection (transitions only) --------
+                // Comm loss comes in two flavors: the NIS socket failing
+                // (daemon down / host unreachable, handled in Err below) and
+                // a healthy daemon reporting STATUS COMMLOST (it lost the
+                // UPS itself, e.g. USB unplugged). Both feed one counter.
+                let daemon_commlost = status.status_text().contains("COMMLOST");
+                if daemon_commlost {
+                    panel.comm_fails = panel.comm_fails.saturating_add(1);
+                    if panel.comm_fails == 3 && !panel.comm_lost_notified {
+                        panel.comm_lost_notified = true;
+                        self.pending_notifications.push(crate::notify::NotifyEvent {
+                            unit: panel.name.clone(),
+                            kind: crate::notify::EventKind::CommLost,
+                            detail: "daemon reports COMMLOST (UPS link down)".to_string(),
+                        });
+                    }
+                    // Don't run on-battery logic on a COMMLOST sample: the
+                    // status fields are stale and the baseline must survive
+                    // until real data returns.
+                    panel.status = Some(status);
+                    panel.error = None;
+                    panel.last_ok = Some(Instant::now());
+                    return;
+                }
                 if panel.comm_lost_notified {
                     self.pending_notifications.push(crate::notify::NotifyEvent {
                         unit: panel.name.clone(),
@@ -344,7 +367,18 @@ impl App {
             for st in tn.poll_status() {
                 test_done = true;
                 match st {
-                    crate::notify::NotifyStatus::Sent(_) => self.toast_ok("test notification sent"),
+                    crate::notify::NotifyStatus::Sent(_) => {
+                        // The trap: the test action works even with the
+                        // master switch off (so tokens can be verified before
+                        // committing). Make that state impossible to miss.
+                        if self.notify_opts.enabled {
+                            self.toast_ok("test notification sent");
+                        } else {
+                            self.toast_info(
+                                "test sent - but notifications are OFF; enable + save or real events won't send",
+                            );
+                        }
+                    }
                     crate::notify::NotifyStatus::Failed(msg) => self.toast_err(msg),
                 }
             }
@@ -354,10 +388,10 @@ impl App {
         }
         for st in self.notifier.poll_status() {
             match st {
-                crate::notify::NotifyStatus::Sent(kind) => {
-                    if kind == crate::notify::EventKind::Test {
-                        self.toast_ok("test notification sent");
-                    }
+                // Real-event deliveries confirm on screen: ties detection ->
+                // delivery visibly, so "no push arrived" is diagnosable.
+                crate::notify::NotifyStatus::Sent(title) => {
+                    self.toast_ok(format!("pushed: {title}"));
                 }
                 crate::notify::NotifyStatus::Failed(msg) => self.toast_err(msg),
             }

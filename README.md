@@ -135,10 +135,13 @@ What triggers a push — transitions only, never steady state:
 
 - a unit switches to battery power (body includes load and estimated runtime)
 - line power returns (body includes charge level)
-- a unit stops answering — after **3 consecutive** failed polls, so one
-  dropped packet doesn't page you at 3am
+- a unit stops answering — either the daemon going unreachable or a
+  healthy daemon reporting `COMMLOST` (USB cable pulled). Both need
+  **3 consecutive** bad polls, so one dropped packet doesn't page you at 3am
 - a lost unit comes back
 
+Every delivered push also confirms on screen as a toast, so you can tell
+detection from delivery problems at a glance.
 Repeat events for the same unit are rate-limited (default 60 s, configurable).
 Delivery runs on a background thread; a dead network can't freeze the UI, and
 failures show up as a toast with the HTTP status.

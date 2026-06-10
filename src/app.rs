@@ -25,6 +25,10 @@ pub struct UpsPanel {
     pub last_ok: Option<Instant>,
     pub load_hist: VecDeque<u64>,
     pub batt_hist: VecDeque<u64>,
+    /// None until the first successful sample; transitions only after that.
+    pub on_battery: Option<bool>,
+    pub comm_fails: u8,
+    pub comm_lost_notified: bool,
 }
 
 impl UpsPanel {
@@ -37,6 +41,9 @@ impl UpsPanel {
             last_ok: None,
             load_hist: VecDeque::with_capacity(HISTORY),
             batt_hist: VecDeque::with_capacity(HISTORY),
+            on_battery: None,
+            comm_fails: 0,
+            comm_lost_notified: false,
         }
     }
 }
@@ -49,6 +56,7 @@ pub enum View {
     Services,
     ClientGen,
     Events,
+    Options,
     Help,
 }
 
@@ -153,6 +161,47 @@ impl ClientGenState {
     }
 }
 
+/// The app options form. Edits a working copy of Notifications; 's' persists
+/// it and rebuilds the notifier so changes take effect immediately.
+pub struct OptionsState {
+    pub working: crate::options::Notifications,
+    pub cursor: usize,
+    pub editing: bool,
+    pub edit_buffer: String,
+}
+
+pub const OPTIONS_FIELDS: usize = 9;
+
+pub fn options_field_label(i: usize) -> &'static str {
+    match i {
+        0 => "notifications",
+        1 => "provider",
+        2 => "pushbullet token",
+        3 => "notify: on battery",
+        4 => "notify: back on line",
+        5 => "notify: comm lost",
+        6 => "notify: comm restored",
+        7 => "cooldown (seconds)",
+        8 => "send test notification",
+        _ => "",
+    }
+}
+
+pub fn options_field_help(i: usize) -> &'static str {
+    match i {
+        0 => "Master switch. Off means nothing is ever sent.",
+        1 => "Delivery service. Pushbullet is the only one implemented.",
+        2 => "Pushbullet access token, from pushbullet.com > Settings > Account. Stored plaintext in ~/.config/apctui/config.toml (chmod 600).",
+        3 => "Push when a unit switches to battery power.",
+        4 => "Push when line power returns.",
+        5 => "Push after 3 consecutive failed polls of a unit.",
+        6 => "Push when a lost unit starts answering again.",
+        7 => "Minimum seconds between repeat pushes for the same unit and event.",
+        8 => "Enter sends a test push with the current (unsaved) settings.",
+        _ => "",
+    }
+}
+
 pub struct App {
     pub upses: Vec<UpsPanel>,
     pub selected: usize,
@@ -167,12 +216,19 @@ pub struct App {
     pub editor: Option<EditorState>,
     pub services: Option<ServicesState>,
     pub clientgen: Option<ClientGenState>,
+    pub options: Option<OptionsState>,
     pub detail_scroll: u16,
     last_discovery: Option<Instant>,
+    pub notify_opts: crate::options::Notifications,
+    notifier: crate::notify::Notifier,
+    /// Short-lived notifier for the options-menu test push.
+    test_notifier: Option<crate::notify::Notifier>,
+    pending_notifications: Vec<crate::notify::NotifyEvent>,
 }
 
 impl App {
-    pub fn new(refs: &[UpsRef], basic: bool) -> Self {
+    pub fn new(refs: &[UpsRef], basic: bool, notify_opts: crate::options::Notifications) -> Self {
+        let notifier = crate::notify::Notifier::spawn(&notify_opts);
         Self {
             upses: refs.iter().map(UpsPanel::new).collect(),
             selected: 0,
@@ -187,8 +243,13 @@ impl App {
             editor: None,
             services: None,
             clientgen: None,
+            options: None,
             detail_scroll: 0,
             last_discovery: None,
+            notify_opts,
+            notifier,
+            test_notifier: None,
+            pending_notifications: Vec::new(),
         }
     }
 
@@ -203,19 +264,102 @@ impl App {
                 let batt = status.num("BCHARGE").unwrap_or(0.0).clamp(0.0, 100.0);
                 push_hist(&mut panel.load_hist, load.round() as u64);
                 push_hist(&mut panel.batt_hist, batt.round() as u64);
+
+                // -------- notification detection (transitions only) --------
+                if panel.comm_lost_notified {
+                    self.pending_notifications.push(crate::notify::NotifyEvent {
+                        unit: panel.name.clone(),
+                        kind: crate::notify::EventKind::CommRestored,
+                        detail: String::new(),
+                    });
+                }
+                panel.comm_fails = 0;
+                panel.comm_lost_notified = false;
+
+                let now_onbatt = status.status_text().contains("ONBATT");
+                if let Some(was) = panel.on_battery {
+                    if !was && now_onbatt {
+                        let runtime = status.num("TIMELEFT").unwrap_or(0.0);
+                        self.pending_notifications.push(crate::notify::NotifyEvent {
+                            unit: panel.name.clone(),
+                            kind: crate::notify::EventKind::OnBattery,
+                            detail: format!(
+                                "load {:.0}%, est. runtime {:.0} min",
+                                load, runtime
+                            ),
+                        });
+                    } else if was && !now_onbatt {
+                        self.pending_notifications.push(crate::notify::NotifyEvent {
+                            unit: panel.name.clone(),
+                            kind: crate::notify::EventKind::OnLine,
+                            detail: format!("battery at {:.0}%", batt),
+                        });
+                    }
+                }
+                panel.on_battery = Some(now_onbatt);
+
                 panel.status = Some(status);
                 panel.error = None;
                 panel.last_ok = Some(Instant::now());
             }
-            Err(e) => panel.error = Some(e),
+            Err(e) => {
+                panel.comm_fails = panel.comm_fails.saturating_add(1);
+                // 3 consecutive failures == lost, not a blip. Notify once.
+                if panel.comm_fails == 3 && !panel.comm_lost_notified {
+                    panel.comm_lost_notified = true;
+                    self.pending_notifications.push(crate::notify::NotifyEvent {
+                        unit: panel.name.clone(),
+                        kind: crate::notify::EventKind::CommLost,
+                        detail: e.clone(),
+                    });
+                }
+                panel.error = Some(e);
+            }
         }
     }
 
-    /// Per-frame housekeeping: expire toasts.
+    /// Per-frame housekeeping: expire toasts, dispatch notifications.
     pub fn tick(&mut self) {
         if let Some(t) = &self.toast {
             if !t.alive() {
                 self.toast = None;
+            }
+        }
+        // Dispatch detected transitions, filtered by the per-event toggles
+        // in effect right now.
+        for ev in self.pending_notifications.drain(..) {
+            let wanted = match ev.kind {
+                crate::notify::EventKind::OnBattery => self.notify_opts.on_battery,
+                crate::notify::EventKind::OnLine => self.notify_opts.on_line,
+                crate::notify::EventKind::CommLost => self.notify_opts.comm_lost,
+                crate::notify::EventKind::CommRestored => self.notify_opts.comm_restored,
+                crate::notify::EventKind::Test => true,
+            };
+            if wanted {
+                self.notifier.send(ev);
+            }
+        }
+        let mut test_done = false;
+        if let Some(tn) = &self.test_notifier {
+            for st in tn.poll_status() {
+                test_done = true;
+                match st {
+                    crate::notify::NotifyStatus::Sent(_) => self.toast_ok("test notification sent"),
+                    crate::notify::NotifyStatus::Failed(msg) => self.toast_err(msg),
+                }
+            }
+        }
+        if test_done {
+            self.test_notifier = None;
+        }
+        for st in self.notifier.poll_status() {
+            match st {
+                crate::notify::NotifyStatus::Sent(kind) => {
+                    if kind == crate::notify::EventKind::Test {
+                        self.toast_ok("test notification sent");
+                    }
+                }
+                crate::notify::NotifyStatus::Failed(msg) => self.toast_err(msg),
             }
         }
     }
@@ -261,6 +405,12 @@ impl App {
                     return;
                 }
             }
+            if let Some(op) = &self.options {
+                if op.editing {
+                    self.options_handle_text(code);
+                    return;
+                }
+            }
         }
 
         match self.view {
@@ -270,6 +420,7 @@ impl App {
             View::Services => self.services_key(code),
             View::ClientGen => self.clientgen_key(code),
             View::Events => self.events_key(code),
+            View::Options => self.options_key(code),
             View::Help => {
                 if matches!(code, KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?')) {
                     self.view = self.prev_view;
@@ -303,6 +454,7 @@ impl App {
             KeyCode::Char('c') => self.open_editor(),
             KeyCode::Char('s') => self.open_services(),
             KeyCode::Char('g') => self.open_clientgen(),
+            KeyCode::Char('o') => self.open_options(),
             _ => {}
         }
     }
@@ -792,7 +944,7 @@ impl App {
             UpsRef { name: "rack-main".into(), addr: "127.0.0.1:3551".into() },
             UpsRef { name: "rack-aux".into(), addr: "127.0.0.1:3552".into() },
         ];
-        let mut app = App::new(&refs, basic);
+        let mut app = App::new(&refs, basic, crate::options::Notifications::default());
         let mut fields = std::collections::HashMap::new();
         for (k, v) in [
             ("STATUS", "ONLINE"), ("LINEV", "121.5 Volts"), ("LOADPCT", "42.0 Percent"),
@@ -903,6 +1055,22 @@ impl App {
         }
     }
 
+    /// Drain detected-but-undispatched notification events (test support).
+    pub fn test_take_pending(&mut self) -> Vec<crate::notify::NotifyEvent> {
+        std::mem::take(&mut self.pending_notifications)
+    }
+
+    /// Open the options view with given working settings (test support).
+    pub fn test_open_options(&mut self, working: crate::options::Notifications) {
+        self.options = Some(OptionsState {
+            working,
+            cursor: 0,
+            editing: false,
+            edit_buffer: String::new(),
+        });
+        self.view = View::Options;
+    }
+
     /// Populate the client-gen view (two tabs).
     pub fn test_open_clientgen(&mut self) {
         let tabs = ["rack-main", "rack-aux"]
@@ -931,6 +1099,140 @@ impl App {
             edit_buffer: String::new(),
         });
         self.view = View::ClientGen;
+    }
+}
+
+impl App {
+    // ---- options ----
+    fn open_options(&mut self) {
+        self.options = Some(OptionsState {
+            working: self.notify_opts.clone(),
+            cursor: 0,
+            editing: false,
+            edit_buffer: String::new(),
+        });
+        self.goto(View::Options);
+    }
+
+    fn options_key(&mut self, code: KeyCode) {
+        let Some(op) = &mut self.options else { return };
+        match code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.options = None;
+                self.view = View::Dashboard;
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                if op.cursor + 1 < OPTIONS_FIELDS {
+                    op.cursor += 1;
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                op.cursor = op.cursor.saturating_sub(1);
+            }
+            KeyCode::Char(' ') => self.options_toggle(),
+            KeyCode::Enter => match op.cursor {
+                0 | 1 | 3..=6 => self.options_toggle(),
+                2 | 7 => {
+                    op.edit_buffer = match op.cursor {
+                        2 => op.working.pushbullet_token.clone(),
+                        _ => op.working.cooldown_secs.to_string(),
+                    };
+                    op.editing = true;
+                }
+                8 => self.options_send_test(),
+                _ => {}
+            },
+            KeyCode::Char('t') => self.options_send_test(),
+            KeyCode::Char('s') => self.options_save(),
+            _ => {}
+        }
+    }
+
+    fn options_toggle(&mut self) {
+        let Some(op) = &mut self.options else { return };
+        match op.cursor {
+            0 => op.working.enabled = !op.working.enabled,
+            1 => {} // single provider; nothing to cycle yet
+            3 => op.working.on_battery = !op.working.on_battery,
+            4 => op.working.on_line = !op.working.on_line,
+            5 => op.working.comm_lost = !op.working.comm_lost,
+            6 => op.working.comm_restored = !op.working.comm_restored,
+            _ => {}
+        }
+    }
+
+    fn options_handle_text(&mut self, code: KeyCode) {
+        let Some(op) = &mut self.options else { return };
+        match code {
+            KeyCode::Esc => {
+                op.editing = false;
+                op.edit_buffer.clear();
+            }
+            KeyCode::Enter => {
+                let buf = op.edit_buffer.clone();
+                match op.cursor {
+                    2 => op.working.pushbullet_token = buf.trim().to_string(),
+                    7 => match buf.trim().parse::<u64>() {
+                        Ok(v) => op.working.cooldown_secs = v,
+                        Err(_) => {
+                            self.toast_err("cooldown must be a whole number of seconds");
+                            if let Some(op) = &mut self.options {
+                                op.editing = false;
+                                op.edit_buffer.clear();
+                            }
+                            return;
+                        }
+                    },
+                    _ => {}
+                }
+                op.editing = false;
+                op.edit_buffer.clear();
+            }
+            KeyCode::Backspace => {
+                op.edit_buffer.pop();
+            }
+            KeyCode::Char(c) => op.edit_buffer.push(c),
+            _ => {}
+        }
+    }
+
+    fn options_send_test(&mut self) {
+        let Some(op) = &self.options else { return };
+        if op.working.pushbullet_token.is_empty() {
+            self.toast_err("set a pushbullet token first");
+            return;
+        }
+        // One-shot notifier with the *working* settings so the test reflects
+        // what's on screen, saved or not. Forced enabled: testing while the
+        // master switch is off is a legitimate setup step.
+        let mut probe = op.working.clone();
+        probe.enabled = true;
+        let n = crate::notify::Notifier::spawn(&probe);
+        n.send(crate::notify::NotifyEvent {
+            unit: String::new(),
+            kind: crate::notify::EventKind::Test,
+            detail: "If you can read this, apctui can reach you.".into(),
+        });
+        // Hand off to the app notifier slot? No — poll this probe inline on
+        // the next ticks by stashing it.
+        self.test_notifier = Some(n);
+        self.toast_info("test push queued...");
+    }
+
+    fn options_save(&mut self) {
+        let Some(op) = &self.options else { return };
+        let working = op.working.clone();
+        match crate::options::save(&working) {
+            Ok(path) => {
+                self.notify_opts = working;
+                self.notifier = crate::notify::Notifier::spawn(&self.notify_opts);
+                self.toast_ok(format!("saved {}", path.display()));
+            }
+            Err(e) => {
+                let first = e.to_string().lines().next().unwrap_or("save failed").to_string();
+                self.toast_err(first);
+            }
+        }
     }
 }
 

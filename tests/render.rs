@@ -223,3 +223,45 @@ fn history_chart_is_right_anchored() {
     assert_eq!(left_hits, 0, "partial history leaked into the left side of the chart");
     assert!(right_hits > 10, "expected plot glyphs hugging the right edge, found {right_hits}");
 }
+
+#[test]
+fn options_view_renders_and_masks_token() {
+    let opts = apctui::options::Notifications {
+        enabled: true,
+        pushbullet_token: "o.abcdefghijklmnop".into(),
+        ..Default::default()
+    };
+    let out = render_with(false, 100, 30, |a| a.test_open_options(opts.clone()));
+    assert!(out.contains("options"));
+    assert!(out.contains("pushbullet token"));
+    assert!(out.contains("o.ab"), "shows token head for recognition");
+    assert!(
+        !out.contains("abcdefghijklmnop"),
+        "full token must never be displayed"
+    );
+    assert!(out.contains("send test notification"));
+    assert!(out.contains("active: pushes will send"));
+}
+
+#[test]
+fn options_view_basic_mode_is_pure_ascii() {
+    let opts = apctui::options::Notifications {
+        enabled: true,
+        pushbullet_token: "o.abcdefghijklmnop".into(),
+        ..Default::default()
+    };
+    let out = render_with(true, 100, 30, |a| a.test_open_options(opts.clone()));
+    let non_ascii: Vec<char> = out.chars().filter(|c| !c.is_ascii()).collect();
+    assert!(
+        non_ascii.is_empty(),
+        "options leaked non-ASCII in basic mode: {:?}",
+        non_ascii.iter().take(10).collect::<String>()
+    );
+}
+
+#[test]
+fn options_warns_when_enabled_without_token() {
+    let opts = apctui::options::Notifications { enabled: true, ..Default::default() };
+    let out = render_with(false, 100, 30, |a| a.test_open_options(opts.clone()));
+    assert!(out.contains("no token: nothing will send"));
+}

@@ -7,6 +7,8 @@ pub mod clientgen;
 pub mod config;
 pub mod events;
 pub mod nis;
+pub mod notify;
+pub mod options;
 pub mod poller;
 pub mod privileged;
 pub mod registry;

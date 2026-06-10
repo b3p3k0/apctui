@@ -42,6 +42,7 @@ pub fn draw(frame: &mut Frame, app: &App, theme: &Theme) {
         View::Services => services::draw(frame, body, app, theme),
         View::ClientGen => clientgen::draw(frame, body, app, theme),
         View::Events => events::draw(frame, body, app, theme),
+        View::Options => options::draw(frame, body, app, theme),
         View::Help => {
             dashboard::draw(frame, body, app, theme);
             help::draw(frame, body, theme);
@@ -64,6 +65,7 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         View::Services => "services",
         View::ClientGen => "client config generator",
         View::Events => "events",
+        View::Options => "options",
         View::Help => "help",
     };
     let mut spans = vec![
@@ -87,22 +89,24 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
 fn draw_footer(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     let keys = if theme.ascii {
         match app.view {
-            View::Dashboard => "enter detail  c config  s services  g client-gen  e events  b basic  p pause  ? help  q quit",
+            View::Dashboard => "enter detail  c config  o options  s services  g client-gen  e events  b basic  ? help  q quit",
             View::Detail => "up/dn scroll  c config  esc back  q quit",
             View::Editor => "tab unit  up/dn field  enter edit  space toggle  d diff  s save  esc close",
             View::Services => "up/dn select  r restart  S start  x stop  e enable  d disable  R rescan  esc back",
             View::ClientGen => "tab unit  up/dn field  enter edit  w write bundle  esc back",
             View::Events => "up/dn scroll  r reload  esc back",
+            View::Options => "up/dn field  enter/space edit  t test  s save  esc back",
             View::Help => "esc close",
         }
     } else {
         match app.view {
-            View::Dashboard => "↵ detail  c config  s services  g client-gen  e events  b basic  p pause  ? help  q quit",
+            View::Dashboard => "↵ detail  c config  o options  s services  g client-gen  e events  b basic  ? help  q quit",
             View::Detail => "↑↓ scroll  c config  esc back  q quit",
             View::Editor => "⇥ unit  ↑↓ field  ↵ edit  space toggle  d diff  s save  esc close",
             View::Services => "↑↓ select  r restart  S start  x stop  e enable  d disable  R rescan  esc back",
             View::ClientGen => "⇥ unit  ↑↓ field  ↵ edit  w write bundle  esc back",
             View::Events => "↑↓ scroll  r reload  esc back",
+            View::Options => "↑↓ field  ↵/space edit  t test  s save  esc back",
             View::Help => "esc close",
         }
     };
@@ -142,4 +146,5 @@ mod editor;
 mod services;
 mod clientgen;
 mod events;
+mod options;
 mod help;

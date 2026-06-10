@@ -77,6 +77,7 @@ instance from the dashboard, use `~/.config/apctui/config.toml` — see
 | `c` | config editor |
 | `s` | service control |
 | `g` | client config generator |
+| `o` | options (notifications) |
 | `e` | event log · `b` ASCII mode · `p` pause · `q` quit |
 
 ## Editing configs without fear
@@ -120,6 +121,33 @@ run apcupsd in net-client mode against this host. `g` generates that config
 per unit — with shutdown thresholds deliberately *more* conservative than the
 master's, so clients finish shutting down before the master cuts power — and
 writes a deploy bundle (config + install steps) to `~/apctui-client-bundles`.
+
+## Notifications
+
+![options](docs/screenshots/options.png)
+
+`o` opens app options. The first (currently only) option group is push
+notifications via [Pushbullet](https://www.pushbullet.com/): paste your
+access token, pick which events you care about, `t` to send a test push,
+`s` to save.
+
+What triggers a push — transitions only, never steady state:
+
+- a unit switches to battery power (body includes load and estimated runtime)
+- line power returns (body includes charge level)
+- a unit stops answering — after **3 consecutive** failed polls, so one
+  dropped packet doesn't page you at 3am
+- a lost unit comes back
+
+Repeat events for the same unit are rate-limited (default 60 s, configurable).
+Delivery runs on a background thread; a dead network can't freeze the UI, and
+failures show up as a toast with the HTTP status.
+
+Settings persist to `~/.config/apctui/config.toml` under `[notifications]`.
+Be aware: **the token is stored in plaintext**. apctui chmods the file to 600
+on save, but it's your home directory — treat it accordingly. Saving rewrites
+only the `[notifications]` section; hand-written `[[ups]]` entries and their
+comments are preserved byte-for-byte.
 
 ## ASCII mode
 

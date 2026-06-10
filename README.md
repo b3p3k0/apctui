@@ -1,170 +1,152 @@
 # apctui
 
-A slick terminal UI to **monitor and manage [apcupsd](http://www.apcupsd.org/)**,
-built for hosts running **multiple APC UPS units** (designed and tested for up
-to four). It watches every unit live, edits their configs safely, controls
-their services, and generates ready-to-deploy configs for networked clients —
-all without leaving the terminal.
+A terminal UI that monitors and manages [apcupsd](http://www.apcupsd.org/) across
+multiple APC UPS units. One screen for live status, config editing, service
+control, and generating configs for networked clients.
 
-Rich mode gives btop-style gauges, gradients, and sparklines. `--basic` (or
-`NO_COLOR` / `TERM=dumb`) degrades to **pure ASCII** for serial consoles and
-log capture. Color depth auto-detects: truecolor → 256 → 16 → mono.
+![dashboard](docs/screenshots/dashboard.png)
 
-```
- apctui │ dashboard  2 units
-╭▌ rack-main Smart-UPS 1500 ⚡ ONLINE ──────────────────────────────────────╮
-│load  42% ██████████████▊            batt  93% ████████████████████████▌   │
-│ line 121.5V batt 27.3V out 378.0W run 22.0m xfers 3                        │
-│       ▁▁▂▃▃▄▄▅▅▆▆▇███████ ▁▁▂▃▃▄▄▅▅▆▆▇███████ ▁▁▂▃▃▄▄▅▅                    │
-│ load ████████████████████████████████████████████████████                 │
-╰───────────────────────────────────────────────────────────────────────────╯
- ↵ detail  c config  s services  g client-gen  e events  b basic  p pause  ? help  q quit
-```
+Built in Rust with [ratatui](https://ratatui.rs/). GPL-3.0-or-later.
 
-## Features
+## The problem this solves
 
-- **Live dashboard** — one card per UPS: status, load/battery gauges, output
-  watts, runtime, transfer count, and a btop-style rolling history chart —
-  **load as bars, battery charge as a line** — sampled every 2 s by default
-  (`--interval`). Auto-collapses to a compact one-line-per-UPS table when the
-  terminal is short.
-- **Detail view** — the full set of NIS fields for the selected unit.
-- **Config editor** — a centralized, structured editor for every instance's
-  `apcupsd.conf`, **one tab per unit** (Tab/Shift-Tab or ←/→ to switch):
-  - typed fields (enums cycle, booleans toggle, integers range-check)
-  - **live validation** with apcupsd-specific rules (e.g. `UPSTYPE net`
-    requires `DEVICE host:port`; warns when no shutdown trigger is set)
-  - a **diff preview before saving**
-  - a **round-trip parser** that preserves every comment, blank line, and bit
-    of whitespace — only the directives you change are touched
-  - saves by escalating per-action (pkexec, falling back to sudo), then
-    restarts the affected daemon (apcupsd needs a restart; it ignores SIGHUP)
-- **Service control** — discovers configured instances, shows active/enabled
-  state and NIS endpoint, and starts/stops/restarts/enables/disables them with
-  a confirmation step for destructive actions.
-- **Client config generator** — one tab per unit; produces an `apcupsd.conf`
-  for a machine that draws power from that UPS but runs apcupsd as a network
-  client, with a live preview and a deploy bundle (config + install
-  instructions). Client
-  shutdown thresholds are auto-set more conservative than the master's, so
-  clients power down before the master cuts UPS output.
-- **Events viewer** — tails the apcupsd event logs.
+apcupsd runs **one daemon per UPS**. Nothing in the stock packaging tells you
+this until you plug in a second unit and discover that the single
+`apcupsd.service` autodetects whichever USB device enumerates first — and that
+`hiddevN` numbering shuffles on reboot, so "whichever" changes.
 
-## Install / upgrade (Debian/Ubuntu)
+Running several units properly means: instanced systemd units, one config per
+UPS on its own NIS port, udev rules pinning each device by USB serial, and
+making sure only the unit that actually powers the host can halt it. apctui's
+installer does all of that, and the TUI gives you one place to watch and
+manage the result.
 
-One command from the project root — it builds apctui, installs the binary,
-and sets up multi-instance apcupsd:
+## What's on screen
+
+- One card per UPS: status, load and battery gauges, output watts, estimated
+  runtime, transfer count.
+- A rolling history chart per unit — load as bars, battery charge as a line —
+  sampled every 2 seconds (`--interval` changes it). The bar color tracks
+  load: green, then yellow, then red.
+- `COMMLOST` in red when a daemon stops answering, with the connection error
+  on the card. The dashboard keeps running; dead units don't take it down.
+- When the terminal is too short for cards (four units on a small screen),
+  it collapses to one line per UPS instead of clipping.
+
+## Install
 
 ```sh
+git clone https://github.com/b3p3k0/apctui.git
+cd apctui
 sudo ./install.sh
 ```
 
-**Upgrading:** pull/extract the new source and re-run `sudo ./install.sh`.
-It rebuilds, reinstalls the binary, refreshes the systemd unit and polkit
-policy, then offers to keep your existing device setup untouched.
+The installer builds the binary (as your user, with your toolchain — Rust
+1.85+, and it offers to `apt install cargo` if you have nothing), then walks
+the multi-instance setup: detects APC USB units by vendor ID, asks you to
+name each one, writes udev rules keyed to each unit's serial number, generates
+per-instance configs on NIS ports 3551 upward, asks which unit powers the
+host, and enables the services.
 
-The build runs as *your* user (not root), using your toolchain — rustup or
-distro cargo, Rust 1.85+. If no toolchain is found the script offers to
-install one from apt.
+Units that do *not* power the host get a no-op `doshutdown` event script
+(exit 99 suppresses apccontrol's default halt) — so a low battery on the UPS
+feeding your network rack logs an event instead of shutting down your server.
 
-Manual build, if you prefer:
+**Upgrading is re-running it.** `git pull && sudo ./install.sh` rebuilds,
+reinstalls, refreshes the systemd unit and polkit policy, then offers to keep
+your existing device setup untouched.
 
-```sh
-cargo build --release
-sudo install -m755 target/release/apctui /usr/local/bin/
-```
-
-## Run
-
-```sh
-apctui                                   # auto-discovers /etc/apcupsd/*.conf
-apctui --ups rack-main=127.0.0.1:3551 --ups rack-aux=127.0.0.1:3552
-apctui --basic                           # plain-monitor mode (pure ASCII)
-apctui --probe                           # one-shot status dump, no TUI
-```
-
-With no flags and no config file, apctui **discovers every instance** in
-`/etc/apcupsd/*.conf` and connects to each one's NIS endpoint — so after
-`install.sh` you just run `apctui` and all your units appear. The CGI-tool
-configs the apcupsd package ships (`hosts.conf`, `multimon.conf`) are
-excluded, and you can hide any other instance with an ignore list in
-`~/.config/apctui/config.toml`:
-
-```toml
-[discovery]
-ignore = ["closet-test"]
-```
-
-The resolution
-order is: `--ups` flags → `--config FILE` → `~/.config/apctui/config.toml` →
-`/etc/apcupsd/*.conf` discovery → a single local fallback on `127.0.0.1:3551`.
-
-You can still define units explicitly in `~/.config/apctui/config.toml` (see
-`examples/apctui.toml`) — useful for monitoring **remote** UPS hosts that have
-no config file on this machine:
-
-```toml
-[[ups]]
-name = "rack-main"
-addr = "127.0.0.1:3551"
-
-[[ups]]
-name = "rack-aux"
-addr = "127.0.0.1:3552"
-```
-
-### Keys
-
-| Context   | Keys |
-|-----------|------|
-| Dashboard | `↵`/`l` detail · `j`/`k` select · `c` config · `s` services · `g` client-gen · `e` events · `b` basic · `p` pause · `?` help · `q` quit |
-| Editor    | `⇥` switch unit · `↑↓` field · `↵` edit · `space` toggle/cycle · `d` diff · `s` save · `esc` close |
-| Services  | `↑↓` select · `r` restart · `S` start · `x` stop · `e` enable · `d` disable · `R` rescan · `esc` back |
-| Client-gen| `⇥` switch unit · `↑↓` field · `↵` edit · `w` write bundle · `esc` back |
-
-## Multi-UPS host setup
-
-apcupsd runs **one daemon per UPS**. `./install.sh` automates the whole
-multi-instance setup on Debian/Ubuntu:
-
-- builds and installs the `apctui` binary, installs apcupsd, disables the
-  stock single-instance service
-- installs an instanced `apcupsd@.service`
-- installs a **polkit policy** so the editor can escalate with a friendly auth
-  prompt instead of running the whole TUI as root
-- **pins each UPS by USB serial number** via udev → `/dev/apcups/<name>`
-  (raw `hiddevN` numbering shuffles across reboots; with identical units a
-  blank-`DEVICE` autodetect would grab an arbitrary one)
-- generates `/etc/apcupsd/<name>.conf` per unit on NIS ports 3551, 3552, …
-- asks **which unit powers this host** — only that unit may halt the system;
-  the others get a no-op `doshutdown` (exit 99 suppresses apccontrol's default)
+## Running it
 
 ```sh
-sudo ./install.sh
+apctui            # discovers every instance in /etc/apcupsd/*.conf
+apctui --basic    # pure-ASCII output, no color
+apctui --probe    # one-shot status dump to stdout, no TUI
 ```
 
-Review the generated files before trusting them with your power policy. Two
-things worth checking on real hardware:
+With no flags, apctui scans `/etc/apcupsd/*.conf` and connects to each
+instance's NIS endpoint. A startup banner tells you exactly where the unit
+list came from, so a misconfigured setup is visible immediately instead of
+silently showing the wrong thing. To monitor remote hosts, or to hide an
+instance from the dashboard, use `~/.config/apctui/config.toml` — see
+[examples/apctui.toml](examples/apctui.toml).
 
-- `udevadm info -a -n /dev/usb/hiddev0` — confirm your units expose vendor
-  `051d` and a populated `serial` attribute (some cheap models ship blank
-  serials, which breaks serial pinning).
-- that each UPS reports a **distinct** serial.
+| Keys | |
+|---|---|
+| `j`/`k` | select unit · `↵` detail view |
+| `c` | config editor |
+| `s` | service control |
+| `g` | client config generator |
+| `e` | event log · `b` ASCII mode · `p` pause · `q` quit |
 
-## Security notes
+## Editing configs without fear
 
-- apcupsd's NIS protocol is **unauthenticated, read-only status**. The
-  generated configs bind `0.0.0.0` so LAN clients work; scope access with your
-  firewall (the installer prints a ready-made `ufw` rule).
-- apctui runs **unprivileged**. Config writes and service actions are performed
-  by a separate `apctui apply` / `apctui service` helper invoked via pkexec
-  (or sudo). That helper **re-validates** the config as root and refuses to
-  write anything with errors, makes a **timestamped backup**, and writes
-  **atomically** (temp file + rename).
-- apcupsd does **not** reload on SIGHUP — applying changes restarts the daemon,
-  and the UI tells you so.
+![editor](docs/screenshots/editor.png)
 
-## Development without hardware
+`c` opens every instance's config in one editor — one tab per unit
+(`Tab` to switch). Fields are typed: enums cycle, booleans toggle, integers
+are range-checked. Validation runs on every change and knows apcupsd's actual
+rules — `UPSTYPE net` without a `host:port` DEVICE is an error, all three
+shutdown triggers disabled gets a warning, duplicate directives get flagged.
+
+`s` saves. Before anything touches disk, you get a diff:
+
+![diff review](docs/screenshots/editor-diff.png)
+
+The parser round-trips your file **byte-exact**: comments, blank lines, odd
+whitespace — all preserved. Only the directive you changed changes. If you've
+hand-annotated your configs over the years, they stay annotated.
+
+The save itself runs through a separate privileged helper (`pkexec`, sudo as
+fallback): it re-validates as root, refuses to write a config with errors,
+backs up the old file with a timestamp, writes atomically, and restarts the
+daemon — restart, not reload, because apcupsd ignores SIGHUP. The TUI itself
+never runs as root.
+
+## Service control
+
+![services](docs/screenshots/services.png)
+
+Start, stop, restart, enable, disable — per instance, with a confirmation
+step that spells out what stopping actually means (monitoring ends, shutdown
+protection ends).
+
+## Network clients
+
+![client generator](docs/screenshots/clientgen.png)
+
+Machines powered by your UPSes but plugged into someone else's USB port can
+run apcupsd in net-client mode against this host. `g` generates that config
+per unit — with shutdown thresholds deliberately *more* conservative than the
+master's, so clients finish shutting down before the master cuts power — and
+writes a deploy bundle (config + install steps) to `~/apctui-client-bundles`.
+
+## ASCII mode
+
+![basic mode](docs/screenshots/basic.png)
+
+`--basic`, the `b` key, `NO_COLOR`, or `TERM=dumb` gets you pure 7-bit ASCII —
+for serial consoles, screen readers, or log capture. This is tested, not
+aspirational: the test suite renders every view and fails if a single
+non-ASCII byte appears.
+
+## Sharp edges
+
+- **NIS has no authentication.** It's read-only status, but anyone who can
+  reach port 3551 can read it. The generated configs bind `0.0.0.0` so LAN
+  clients work; firewall accordingly (the installer prints a ready-made
+  `ufw` rule).
+- **Serial pinning needs serials.** Some cheaper APC models ship with a blank
+  USB serial number, which breaks per-unit udev pinning. Check with
+  `udevadm info -a -n /dev/usb/hiddev0` before trusting a multi-unit setup.
+- **Debian/Ubuntu only**, as far as the installer goes. The TUI itself just
+  needs NIS endpoints and will monitor anything.
+- A unit with `NETSERVER off` can't be monitored (no NIS to poll) — it shows
+  in the services view but not the dashboard.
+
+## Development
+
+No UPS required:
 
 ```sh
 cargo run --example mock_nis -- 3551 rack-main &
@@ -172,17 +154,11 @@ cargo run --example mock_nis -- 3552 rack-aux onbatt &   # cycles ONLINE/ONBATT/
 cargo run -- --ups rack-main=127.0.0.1:3551 --ups rack-aux=127.0.0.1:3552
 ```
 
-## Tests
-
-```sh
-cargo test
-```
-
-Covers the NIS protocol round-trip, the config parser's byte-exact
-round-tripping, schema validation rules, the diff engine, service discovery,
-client-config generation, and **rendering of every view** (via ratatui's
-`TestBackend`), including a guarantee that **basic mode emits only ASCII**.
+`cargo test` covers the NIS protocol, byte-exact config round-tripping,
+validation rules, the diff engine, instance discovery, client-config
+generation, editor key handling, and rendering of every view through
+ratatui's TestBackend — including the ASCII-purity guarantee above.
 
 ## License
 
-GPL-3.0-or-later. See `LICENSE`.
+GPL-3.0-or-later. Full text in [LICENSE](LICENSE).

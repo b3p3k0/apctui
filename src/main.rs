@@ -97,7 +97,8 @@ fn main() -> Result<()> {
     }
 
     let color_mode = if cli.basic { theme::ColorMode::Mono } else { theme::detect() };
-    let mut app = app::App::new(&upses, cli.basic);
+    let notify_opts = apctui::options::load();
+    let mut app = app::App::new(&upses, cli.basic, notify_opts);
     app.notify_info(source.describe(upses.len()));
 
     let mut terminal = ratatui::init();

@@ -35,6 +35,7 @@ pub fn draw(frame: &mut Frame, area: Rect, theme: &Theme) {
         ("  c", "edit the selected UPS's config"),
         ("  s", "service control (start/stop/restart)"),
         ("  g", "generate a network-client config"),
+        ("  o", "options (notifications)"),
         ("  e", "view event log"),
         ("  b", "toggle basic (ASCII, no color) mode"),
         ("  p", "pause/resume sampling"),

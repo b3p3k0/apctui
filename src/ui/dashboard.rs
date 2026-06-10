@@ -160,13 +160,16 @@ fn draw_history(frame: &mut Frame, area: Rect, panel: &crate::app::UpsPanel, the
         // two ascii ramps stacked: load then batt
         const RAMP: &[u8] = b" .:-=+*#%@";
         let take = area.width.saturating_sub(7) as usize;
+        // newest at the right edge: left-pad until the window fills
         let ramp = |hist: &std::collections::VecDeque<u64>| -> String {
-            hist.iter()
+            let s: String = hist
+                .iter()
                 .rev()
                 .take(take)
                 .rev()
                 .map(|v| RAMP[((*v as usize) * (RAMP.len() - 1)) / 100] as char)
-                .collect()
+                .collect();
+            format!("{}{}", " ".repeat(take.saturating_sub(s.chars().count())), s)
         };
         let mut lines = vec![Line::from(vec![
             Span::styled(" load ", Style::default().fg(theme.dim())),
@@ -182,20 +185,23 @@ fn draw_history(frame: &mut Frame, area: Rect, panel: &crate::app::UpsPanel, the
         return;
     }
 
-    // rich: ratatui Chart — load bars + battery line on a shared 0-100 axis
-    let take = (area.width as usize).saturating_sub(2);
+    // rich: ratatui Chart — load bars + battery line on a shared 0-100 axis.
+    // Newest sample is pinned to the RIGHT edge (btop convention): history
+    // extends leftward as it accumulates and scrolls left once full.
+    let take = (area.width as usize).saturating_sub(2).max(2);
     let to_points = |hist: &std::collections::VecDeque<u64>| -> Vec<(f64, f64)> {
         let n = hist.len();
-        let start = n.saturating_sub(take);
+        let count = n.min(take);
+        let start = n - count;
         hist.iter()
             .skip(start)
             .enumerate()
-            .map(|(i, v)| (i as f64, *v as f64))
+            .map(|(i, v)| ((take - count + i) as f64, *v as f64))
             .collect()
     };
     let load_pts = to_points(&panel.load_hist);
     let batt_pts = to_points(&panel.batt_hist);
-    let x_max = take.max(2) as f64;
+    let x_max = (take - 1) as f64;
 
     let load_now = load_pts.last().map(|p| p.1).unwrap_or(0.0);
     let datasets = vec![

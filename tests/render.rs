@@ -183,3 +183,43 @@ fn paused_header_ascii_in_basic() {
     });
     assert_ascii("paused basic", &basic);
 }
+
+#[test]
+fn history_chart_is_right_anchored() {
+    // Fixture history (50 samples) is narrower than the chart window (~96
+    // cols at width 100), so a partially-filled chart must hug the RIGHT
+    // edge — btop convention — leaving the left side empty.
+    let mode = ColorMode::Truecolor;
+    let theme = Theme::new(mode, false);
+    let mut app = App::test_fixture(false);
+    app.test_set_view(View::Dashboard);
+    let backend = TestBackend::new(100, 26);
+    let mut term = Terminal::new(backend).unwrap();
+    term.draw(|f| ui::draw(f, &app, &theme)).unwrap();
+    let buf = term.backend().buffer().clone();
+
+    let is_plot_glyph = |s: &str| {
+        s.chars().next().map(|c| {
+            ('\u{2580}'..='\u{259F}').contains(&c)   // block elements (bars)
+                || ('\u{2800}'..='\u{28FF}').contains(&c) // braille (batt line)
+        }).unwrap_or(false)
+    };
+
+    // First card chart rows (bars row=2, stats=3, chart 4..=10 inside card).
+    let mut left_hits = 0;
+    let mut right_hits = 0;
+    for y in 4..=10u16 {
+        for x in 3..=30u16 {
+            if is_plot_glyph(buf[(x, y)].symbol()) {
+                left_hits += 1;
+            }
+        }
+        for x in 65..=96u16 {
+            if is_plot_glyph(buf[(x, y)].symbol()) {
+                right_hits += 1;
+            }
+        }
+    }
+    assert_eq!(left_hits, 0, "partial history leaked into the left side of the chart");
+    assert!(right_hits > 10, "expected plot glyphs hugging the right edge, found {right_hits}");
+}

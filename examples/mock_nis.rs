@@ -3,6 +3,7 @@
 //!
 //!   cargo run --example mock_nis -- 3551 rack-main
 //!   cargo run --example mock_nis -- 3552 rack-aux onbatt
+//!   cargo run --example mock_nis -- 3553 closet commlost
 //!
 //! Serves a `status` response with drifting load, and (with the `onbatt`
 //! flag) cycles through ONLINE -> ONBATT -> LOWBATT to exercise the UI.
@@ -24,7 +25,7 @@ fn line(s: &mut TcpStream, key: &str, value: String) -> std::io::Result<()> {
     write_frame(s, format!("{key:<9}: {value}").as_bytes())
 }
 
-fn serve(mut conn: TcpStream, name: &str, cycle: bool) -> std::io::Result<()> {
+fn serve(mut conn: TcpStream, name: &str, mode: &str) -> std::io::Result<()> {
     // read command frame
     let mut len = [0u8; 2];
     conn.read_exact(&mut len)?;
@@ -38,12 +39,19 @@ fn serve(mut conn: TcpStream, name: &str, cycle: bool) -> std::io::Result<()> {
     let t = now_secs();
     let load = 42.0 + 18.0 * (t / 23.0).sin() + 5.0 * (t / 3.7).sin();
     let phase = ((t / 45.0) as u64) % 4;
-    let (status, bcharge, timeleft, linev) = if cycle {
+    let (status, bcharge, timeleft, linev) = if mode == "onbatt" {
         match phase {
             0 => ("ONLINE", 100.0, 28.0, 121.4),
             1 => ("ONBATT", 80.0 - (t % 45.0), 14.0 - (t % 45.0) / 4.0, 0.0),
             2 => ("ONBATT LOWBATT", 12.0, 2.5, 0.0),
             _ => ("ONLINE", 65.0 + (t % 45.0) / 2.0, 18.0, 120.9),
+        }
+    } else if mode == "commlost" {
+        // NIS keeps answering; the daemon has lost the UPS (USB unplugged).
+        match phase {
+            0 => ("ONLINE", 97.0, 24.0, 121.1),
+            1 | 2 => ("COMMLOST", 0.0, 0.0, 0.0),
+            _ => ("ONLINE", 97.0, 24.0, 121.2),
         }
     } else {
         ("ONLINE", 94.0 + (t / 60.0).sin(), 22.0 + 2.0 * (t / 40.0).sin(), 121.5)
@@ -71,14 +79,15 @@ fn main() -> std::io::Result<()> {
     let mut args = std::env::args().skip(1);
     let port: u16 = args.next().unwrap_or_else(|| "3551".into()).parse().expect("port");
     let name = args.next().unwrap_or_else(|| "mock-ups".into());
-    let cycle = args.next().as_deref() == Some("onbatt");
+    let mode = args.next().unwrap_or_default();
 
     let listener = TcpListener::bind(("127.0.0.1", port))?;
-    eprintln!("mock NIS `{name}` on 127.0.0.1:{port} (cycle={cycle})");
+    eprintln!("mock NIS `{name}` on 127.0.0.1:{port} (mode={mode:?})");
     for conn in listener.incoming().flatten() {
         let name = name.clone();
+        let mode = mode.clone();
         std::thread::spawn(move || {
-            let _ = serve(conn, &name, cycle);
+            let _ = serve(conn, &name, &mode);
         });
     }
     Ok(())

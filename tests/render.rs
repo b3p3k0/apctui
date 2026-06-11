@@ -265,3 +265,23 @@ fn options_warns_when_enabled_without_token() {
     let out = render_with(false, 100, 30, |a| a.test_open_options(opts.clone()));
     assert!(out.contains("no token: nothing will send"));
 }
+
+#[test]
+fn options_confirm_modal_renders_and_is_ascii_clean_in_basic() {
+    let opts = apctui::options::Notifications { enabled: true, ..Default::default() };
+    let rich = render_with(false, 100, 30, |a| {
+        a.test_open_options(opts.clone());
+        a.options.as_mut().unwrap().confirm_close = true;
+    });
+    assert!(rich.contains("unsaved changes"));
+    assert!(rich.contains("save and close"));
+    assert!(rich.contains("discard changes"));
+    assert!(rich.contains("keep editing"));
+
+    let basic = render_with(true, 100, 30, |a| {
+        a.test_open_options(opts.clone());
+        a.options.as_mut().unwrap().confirm_close = true;
+    });
+    let non_ascii: Vec<char> = basic.chars().filter(|c| !c.is_ascii()).collect();
+    assert!(non_ascii.is_empty(), "confirm modal leaked non-ASCII: {:?}", non_ascii.iter().take(10).collect::<String>());
+}

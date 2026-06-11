@@ -168,6 +168,8 @@ pub struct OptionsState {
     pub cursor: usize,
     pub editing: bool,
     pub edit_buffer: String,
+    /// Unsaved-changes prompt is showing (raised by esc/q while dirty).
+    pub confirm_close: bool,
 }
 
 pub const OPTIONS_FIELDS: usize = 9;
@@ -1108,6 +1110,7 @@ impl App {
             cursor: 0,
             editing: false,
             edit_buffer: String::new(),
+            confirm_close: false,
         });
         self.view = View::Options;
     }
@@ -1151,14 +1154,42 @@ impl App {
             cursor: 0,
             editing: false,
             edit_buffer: String::new(),
+            confirm_close: false,
         });
         self.goto(View::Options);
     }
 
     fn options_key(&mut self, code: KeyCode) {
         let Some(op) = &mut self.options else { return };
+        if op.confirm_close {
+            match code {
+                KeyCode::Char('s') | KeyCode::Enter => {
+                    if self.options_save() {
+                        self.options = None;
+                        self.view = View::Dashboard;
+                    } else if let Some(op) = &mut self.options {
+                        // save failed: error toast is up; back to the form
+                        op.confirm_close = false;
+                    }
+                }
+                KeyCode::Char('d') => {
+                    self.options = None;
+                    self.view = View::Dashboard;
+                    self.toast_info("changes discarded");
+                }
+                KeyCode::Esc | KeyCode::Char('c') | KeyCode::Char('q') => {
+                    op.confirm_close = false;
+                }
+                _ => {}
+            }
+            return;
+        }
         match code {
             KeyCode::Esc | KeyCode::Char('q') => {
+                if op.working != self.notify_opts {
+                    op.confirm_close = true;
+                    return;
+                }
                 self.options = None;
                 self.view = View::Dashboard;
             }
@@ -1184,7 +1215,9 @@ impl App {
                 _ => {}
             },
             KeyCode::Char('t') => self.options_send_test(),
-            KeyCode::Char('s') => self.options_save(),
+            KeyCode::Char('s') => {
+                let _ = self.options_save();
+            }
             _ => {}
         }
     }
@@ -1260,18 +1293,20 @@ impl App {
         self.toast_info("test push queued...");
     }
 
-    fn options_save(&mut self) {
-        let Some(op) = &self.options else { return };
+    fn options_save(&mut self) -> bool {
+        let Some(op) = &self.options else { return false };
         let working = op.working.clone();
         match crate::options::save(&working) {
             Ok(path) => {
                 self.notify_opts = working;
                 self.notifier = crate::notify::Notifier::spawn(&self.notify_opts);
                 self.toast_ok(format!("saved {}", path.display()));
+                true
             }
             Err(e) => {
                 let first = e.to_string().lines().next().unwrap_or("save failed").to_string();
                 self.toast_err(first);
+                false
             }
         }
     }

@@ -80,3 +80,78 @@ fn cooldown_rejects_non_numeric_input() {
     let op = app.options_ref().unwrap();
     assert_eq!(op.working.cooldown_secs, 60, "invalid input must not change the value");
 }
+
+// ---- unsaved-changes prompt ----
+
+fn make_dirty(app: &mut App) {
+    // cursor starts at 0 (enabled toggle); space flips it
+    key(app, KeyCode::Char(' '));
+}
+
+#[test]
+fn clean_close_needs_no_prompt() {
+    let mut app = App::test_fixture(false);
+    open_options(&mut app);
+    key(&mut app, KeyCode::Esc);
+    assert_eq!(app.view, View::Dashboard, "no changes, esc closes immediately");
+}
+
+#[test]
+fn dirty_close_raises_prompt_and_esc_returns_to_form() {
+    let mut app = App::test_fixture(false);
+    open_options(&mut app);
+    make_dirty(&mut app);
+    key(&mut app, KeyCode::Char('q'));
+    assert_eq!(app.view, View::Options, "dirty q must not close");
+    assert!(app.options_ref().unwrap().confirm_close, "prompt raised");
+    key(&mut app, KeyCode::Esc);
+    assert_eq!(app.view, View::Options);
+    assert!(!app.options_ref().unwrap().confirm_close, "esc returns to the form");
+    // edits preserved
+    assert!(app.options_ref().unwrap().working.enabled);
+}
+
+#[test]
+fn prompt_keys_do_not_leak_to_the_form() {
+    let mut app = App::test_fixture(false);
+    open_options(&mut app);
+    make_dirty(&mut app);
+    key(&mut app, KeyCode::Esc); // raise prompt
+    let cursor_before = app.options_ref().unwrap().cursor;
+    key(&mut app, KeyCode::Char('j')); // would move cursor if it leaked
+    key(&mut app, KeyCode::Char('t')); // would fire a test push if it leaked
+    assert_eq!(app.options_ref().unwrap().cursor, cursor_before);
+    assert!(app.options_ref().unwrap().confirm_close, "prompt still up");
+}
+
+#[test]
+fn discard_closes_without_applying() {
+    let mut app = App::test_fixture(false);
+    open_options(&mut app);
+    make_dirty(&mut app);
+    key(&mut app, KeyCode::Esc);
+    key(&mut app, KeyCode::Char('d'));
+    assert_eq!(app.view, View::Dashboard);
+    assert!(!app.notify_opts.enabled, "discarded change must not reach live settings");
+}
+
+#[test]
+fn save_from_prompt_persists_and_closes() {
+    // isolate the config write
+    let dir = std::env::temp_dir().join(format!("apctui-prompt-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::env::set_var("XDG_CONFIG_HOME", &dir);
+
+    let mut app = App::test_fixture(false);
+    open_options(&mut app);
+    make_dirty(&mut app);
+    key(&mut app, KeyCode::Esc);
+    key(&mut app, KeyCode::Char('s'));
+    assert_eq!(app.view, View::Dashboard);
+    assert!(app.notify_opts.enabled, "saved change must reach live settings");
+    let written = std::fs::read_to_string(dir.join("apctui").join("config.toml")).unwrap();
+    assert!(written.contains("enabled = true"));
+
+    std::env::remove_var("XDG_CONFIG_HOME");
+    std::fs::remove_dir_all(&dir).ok();
+}

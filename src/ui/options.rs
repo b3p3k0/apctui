@@ -7,7 +7,7 @@ use crate::theme::Theme;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Paragraph, Wrap};
+use ratatui::widgets::{Clear, Paragraph, Wrap};
 use ratatui::Frame;
 
 /// Mask a credential for display: first 4 chars then stars, capped.
@@ -92,6 +92,15 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         ]));
     }
 
+    // dirty indicator: make unsaved state visible before the user tries to leave
+    if op.working != app.notify_opts {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!(" {} unsaved changes {} press s to save", theme.g_dot(), theme.g_mdot()),
+            Style::default().fg(theme.warn_color()).add_modifier(Modifier::BOLD),
+        )));
+    }
+
     // delivery state summary
     lines.push(Line::from(""));
     let state = if !w.enabled {
@@ -131,4 +140,42 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         )),
     ];
     frame.render_widget(Paragraph::new(help_lines).wrap(Wrap { trim: true }), help_area);
+
+    if op.confirm_close {
+        draw_confirm(frame, area, theme);
+    }
+}
+
+fn draw_confirm(frame: &mut Frame, area: Rect, theme: &Theme) {
+    let w = 52.min(area.width.saturating_sub(4));
+    let h = 7;
+    let popup = Rect {
+        x: area.x + (area.width.saturating_sub(w)) / 2,
+        y: area.y + (area.height.saturating_sub(h)) / 2,
+        width: w,
+        height: h,
+    };
+    frame.render_widget(Clear, popup);
+    let blk = block(theme)
+        .title(Line::from(Span::styled(
+            " unsaved changes ",
+            Style::default().add_modifier(Modifier::BOLD).fg(theme.warn_color()),
+        )))
+        .border_style(Style::default().fg(theme.warn_color()));
+    let inner = blk.inner(popup);
+    frame.render_widget(blk, popup);
+
+    let key = |k: &str| Span::styled(format!("  {k} "), Style::default().fg(theme.accent()).add_modifier(Modifier::BOLD));
+    let txt = |t: &str| Span::styled(t.to_string(), Style::default().fg(theme.fg()));
+    let lines = vec![
+        Line::from(Span::styled(
+            " Your option changes have not been saved.",
+            Style::default().fg(theme.fg()),
+        )),
+        Line::from(""),
+        Line::from(vec![key("s"), txt("save and close")]),
+        Line::from(vec![key("d"), txt("discard changes")]),
+        Line::from(vec![key("esc"), txt("keep editing")]),
+    ];
+    frame.render_widget(Paragraph::new(lines), inner);
 }

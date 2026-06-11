@@ -285,3 +285,34 @@ fn options_confirm_modal_renders_and_is_ascii_clean_in_basic() {
     let non_ascii: Vec<char> = basic.chars().filter(|c| !c.is_ascii()).collect();
     assert!(non_ascii.is_empty(), "confirm modal leaked non-ASCII: {:?}", non_ascii.iter().take(10).collect::<String>());
 }
+
+#[test]
+fn header_notify_indicator_reflects_armed_state() {
+    // disarmed (fixture defaults): no indicator
+    let out = render_with(false, 100, 26, |a| a.test_set_view(View::Dashboard));
+    assert!(!out.contains("notify on"), "indicator shown while disarmed");
+
+    // armed (enabled + token): indicator present
+    let refs = vec![apctui::registry::UpsRef {
+        name: "rack-main".into(),
+        addr: "127.0.0.1:3551".into(),
+    }];
+    let opts = apctui::options::Notifications {
+        enabled: true,
+        pushbullet_token: "o.x".into(),
+        ..Default::default()
+    };
+    let theme = Theme::new(ColorMode::Truecolor, false);
+    let app = App::new(&refs, false, opts);
+    let backend = TestBackend::new(100, 26);
+    let mut term = Terminal::new(backend).unwrap();
+    term.draw(|f| ui::draw(f, &app, &theme)).unwrap();
+    let buf = term.backend().buffer().clone();
+    let mut out = String::new();
+    for y in 0..buf.area().height {
+        for x in 0..buf.area().width {
+            out.push_str(buf[(x, y)].symbol());
+        }
+    }
+    assert!(out.contains("notify on"), "armed notifier must show in header");
+}

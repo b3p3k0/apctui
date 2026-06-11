@@ -853,20 +853,32 @@ impl App {
     // ---- client gen ----
     fn open_clientgen(&mut self) {
         // One tab per monitored unit, each seeded from its on-disk config
-        // when available (master address guessed from the unit's NIS host).
+        // when available. The master address apctui polls is usually
+        // loopback - meaningless to a network client - so substitute this
+        // host's detected LAN address (see netutil for range priority).
+        let lan = crate::netutil::lan_ip().map(|ip| ip.to_string());
         let mut tabs = Vec::new();
         for panel in &self.upses {
             let mut params = crate::clientgen::ClientParams::default();
             let path = std::path::Path::new(service::CONF_DIR)
                 .join(format!("{}.conf", panel.name));
+            let reachable_host = |h: &str| -> String {
+                let loopback = h == "localhost" || h.starts_with("127.");
+                match (&lan, loopback) {
+                    (Some(ip), true) => ip.clone(),
+                    _ => h.to_string(),
+                }
+            };
             if let Ok(raw) = std::fs::read_to_string(&path) {
                 let cf = ConfigFile::parse(&raw);
                 let port = cf.get("NISPORT").unwrap_or("3551").to_string();
-                let host = panel.addr.split(':').next().unwrap_or("127.0.0.1");
+                let host = reachable_host(panel.addr.split(':').next().unwrap_or("127.0.0.1"));
                 params = crate::clientgen::suggest_from_master(&cf, &format!("{host}:{port}"));
             } else {
                 params.ups_name = panel.name.clone();
-                params.master_addr = panel.addr.clone();
+                let host = reachable_host(panel.addr.split(':').next().unwrap_or("127.0.0.1"));
+                let port = panel.addr.split(':').nth(1).unwrap_or("3551");
+                params.master_addr = format!("{host}:{port}");
             }
             let preview = crate::clientgen::render_conf(&params);
             tabs.push(ClientGenTab {
@@ -1123,6 +1135,11 @@ impl App {
     /// Full notifier state, for the header indicator.
     pub fn notifier_state(&self) -> crate::notify::NotifierState {
         self.notifier.state()
+    }
+
+    /// Read-only client-gen state access (test support).
+    pub fn clientgen_ref(&self) -> Option<&ClientGenState> {
+        self.clientgen.as_ref()
     }
 
     /// Read-only options state access (test support).

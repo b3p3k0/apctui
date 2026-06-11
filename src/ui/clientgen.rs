@@ -79,6 +79,19 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         ]));
     }
     lines.push(Line::from(""));
+    // A loopback master is unreachable from any client machine. This fires
+    // when LAN detection failed at open, or the user typed loopback in.
+    let master_host = tab.params.master_addr.split(':').next().unwrap_or("");
+    if master_host == "localhost" || master_host.starts_with("127.") {
+        lines.push(Line::from(Span::styled(
+            format!(
+                "  {} master is loopback - clients can't reach it; set this host's LAN IP",
+                theme.g_warn()
+            ),
+            Style::default().fg(theme.warn_color()).add_modifier(Modifier::BOLD),
+        )));
+    }
+
     if let Some(path) = &tab.saved_path {
         lines.push(Line::from(Span::styled(
             format!("  {} wrote {path}", theme.g_check()),

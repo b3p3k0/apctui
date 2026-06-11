@@ -316,3 +316,26 @@ fn header_notify_indicator_reflects_armed_state() {
     }
     assert!(out.contains("notify on"), "armed notifier must show in header");
 }
+
+#[test]
+fn clientgen_warns_on_loopback_master() {
+    let out = render_with(false, 110, 30, |a| {
+        a.test_open_clientgen();
+        a.clientgen.as_mut().unwrap().tabs[0].params.master_addr = "127.0.0.1:3551".into();
+    });
+    assert!(out.contains("master is loopback"), "warning missing for 127.0.0.1");
+
+    let out = render_with(false, 110, 30, |a| {
+        a.test_open_clientgen(); // fixture seeds 192.168.1.10 - reachable
+    });
+    assert!(!out.contains("master is loopback"), "false warning on reachable master");
+
+    // basic mode purity with the warning showing
+    let basic = render_with(true, 110, 30, |a| {
+        a.test_open_clientgen();
+        a.clientgen.as_mut().unwrap().tabs[0].params.master_addr = "localhost:3551".into();
+    });
+    assert!(basic.contains("master is loopback"));
+    let non_ascii: Vec<char> = basic.chars().filter(|c| !c.is_ascii()).collect();
+    assert!(non_ascii.is_empty(), "warning leaked non-ASCII: {:?}", non_ascii.iter().take(8).collect::<String>());
+}

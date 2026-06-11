@@ -190,3 +190,23 @@ fn saving_twice_keeps_the_notifier_armed() {
     std::env::remove_var("XDG_CONFIG_HOME");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn clientgen_never_seeds_loopback_when_lan_known() {
+    // Environment-dependent on detection succeeding; the invariant holds
+    // either way: with a LAN address known, no tab may seed loopback.
+    let mut app = App::test_fixture(false);
+    app.on_key(KeyCode::Char('g'), KeyModifiers::NONE);
+    if apctui::netutil::lan_ip().is_some() {
+        if let Some(cg) = app.clientgen_ref() {
+            for t in &cg.tabs {
+                assert!(
+                    !t.params.master_addr.starts_with("127."),
+                    "tab {} seeded loopback {}",
+                    t.instance,
+                    t.params.master_addr
+                );
+            }
+        }
+    }
+}

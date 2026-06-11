@@ -10,8 +10,12 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Duration;
 
+/// Version with build identity: `0.5.0 (g039c121)` — the hash answers
+/// "is this binary current" definitively, unlike the bare semver.
+const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (g", env!("APCTUI_GIT_HASH"), ")");
+
 #[derive(Parser)]
-#[command(version, about = "Slick TUI monitor & manager for apcupsd", long_about = None)]
+#[command(version = VERSION, about = "Slick TUI monitor & manager for apcupsd", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Cmd>,

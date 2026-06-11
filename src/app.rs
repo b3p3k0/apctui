@@ -1098,6 +1098,11 @@ impl App {
         std::mem::take(&mut self.pending_notifications)
     }
 
+    /// Whether the live notifier is armed (enabled + token at last save/load).
+    pub fn notifier_active(&self) -> bool {
+        self.notifier.is_active()
+    }
+
     /// Read-only options state access (test support).
     pub fn options_ref(&self) -> Option<&OptionsState> {
         self.options.as_ref()

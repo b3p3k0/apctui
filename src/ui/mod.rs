@@ -78,6 +78,14 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
             format!("  {} unit{}", app.upses.len(), if app.upses.len() == 1 { "" } else { "s" }),
             Style::default().fg(theme.dim()),
         ));
+        // Armed-state at a glance: this only shows when the notifier will
+        // actually send (enabled + token, as of the last save or startup).
+        if app.notifier_active() {
+            spans.push(Span::styled(
+                format!("  {} notify on", theme.g_dot()),
+                Style::default().fg(theme.ok_color()),
+            ));
+        }
     }
     if app.paused {
         let pz = if theme.ascii { "  [PAUSED]" } else { "  ⏸ PAUSED" };

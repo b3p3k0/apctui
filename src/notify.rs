@@ -91,23 +91,77 @@ pub enum NotifyStatus {
     Failed(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotifierState {
+    /// This instance holds the machine-wide lock and will send.
+    Active,
+    /// Another running instance holds the lock; this one stays quiet so
+    /// every event is pushed exactly once per machine.
+    Standby,
+    /// Notifications disabled or no token configured.
+    Disabled,
+}
+
 pub struct Notifier {
     tx: Option<Sender<NotifyEvent>>,
     status_rx: Option<Receiver<NotifyStatus>>,
+    state: NotifierState,
+    /// Held for the notifier's lifetime; flock releases on drop/exit/crash.
+    _lock: Option<std::fs::File>,
+}
+
+fn default_lock_path() -> Option<std::path::PathBuf> {
+    crate::options::config_path().map(|p| p.with_file_name("notifier.lock"))
+}
+
+fn try_lock(path: &std::path::Path) -> Option<std::fs::File> {
+    use fs2::FileExt;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).ok()?;
+    }
+    let f = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path)
+        .ok()?;
+    f.try_lock_exclusive().ok()?;
+    Some(f)
 }
 
 impl Notifier {
     /// No-op notifier: used when notifications are disabled and in tests.
     pub fn disabled() -> Self {
-        Notifier { tx: None, status_rx: None }
+        Notifier { tx: None, status_rx: None, state: NotifierState::Disabled, _lock: None }
     }
 
     /// Spawn the delivery worker. Returns a disabled notifier if the config
-    /// can't deliver anything (disabled, or no token).
+    /// can't deliver anything, and a standby one if another running instance
+    /// already holds this machine's notification duty.
     pub fn spawn(opts: &Notifications) -> Self {
+        Self::spawn_with_lock(opts, default_lock_path().as_deref())
+    }
+
+    /// Lock path injectable for tests. `None` skips the singleton check
+    /// (used by the options-menu test push, which is explicitly manual).
+    pub fn spawn_with_lock(opts: &Notifications, lock_path: Option<&std::path::Path>) -> Self {
         if !opts.enabled || opts.pushbullet_token.is_empty() {
             return Notifier::disabled();
         }
+        let lock = match lock_path {
+            Some(p) => match try_lock(p) {
+                Some(f) => Some(f),
+                None => {
+                    return Notifier {
+                        tx: None,
+                        status_rx: None,
+                        state: NotifierState::Standby,
+                        _lock: None,
+                    };
+                }
+            },
+            None => None,
+        };
         let token = opts.pushbullet_token.clone();
         let url = endpoint();
         let cooldown = Duration::from_secs(opts.cooldown_secs);
@@ -117,7 +171,11 @@ impl Notifier {
             .name("apctui-notify".into())
             .spawn(move || worker(rx, status_tx, token, url, cooldown))
             .expect("spawning notifier thread");
-        Notifier { tx: Some(tx), status_rx: Some(status_rx) }
+        Notifier { tx: Some(tx), status_rx: Some(status_rx), state: NotifierState::Active, _lock: lock }
+    }
+
+    pub fn state(&self) -> NotifierState {
+        self.state
     }
 
     pub fn is_active(&self) -> bool {
@@ -301,5 +359,42 @@ mod tests {
             assert!(Instant::now() < deadline, "no Sent status within 5s");
             std::thread::sleep(Duration::from_millis(20));
         }
+    }
+}
+
+#[cfg(test)]
+mod singleton_tests {
+    use super::*;
+
+    fn armed() -> Notifications {
+        Notifications {
+            enabled: true,
+            pushbullet_token: "o.lock".into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn second_instance_goes_standby_until_first_releases() {
+        let lock = std::env::temp_dir().join(format!("apctui-lock-{}", std::process::id()));
+        let first = Notifier::spawn_with_lock(&armed(), Some(&lock));
+        assert_eq!(first.state(), NotifierState::Active);
+
+        let second = Notifier::spawn_with_lock(&armed(), Some(&lock));
+        assert_eq!(second.state(), NotifierState::Standby, "duplicate sender must not arm");
+        assert!(!second.is_active());
+
+        drop(first); // releases the flock
+        let third = Notifier::spawn_with_lock(&armed(), Some(&lock));
+        assert_eq!(third.state(), NotifierState::Active, "lock must be reusable after release");
+        std::fs::remove_file(&lock).ok();
+    }
+
+    #[test]
+    fn no_lock_path_skips_singleton() {
+        let a = Notifier::spawn_with_lock(&armed(), None);
+        let b = Notifier::spawn_with_lock(&armed(), None);
+        assert_eq!(a.state(), NotifierState::Active);
+        assert_eq!(b.state(), NotifierState::Active, "test pushes are never gated");
     }
 }

@@ -78,13 +78,18 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
             format!("  {} unit{}", app.upses.len(), if app.upses.len() == 1 { "" } else { "s" }),
             Style::default().fg(theme.dim()),
         ));
-        // Armed-state at a glance: this only shows when the notifier will
-        // actually send (enabled + token, as of the last save or startup).
-        if app.notifier_active() {
-            spans.push(Span::styled(
+        // Armed-state at a glance. Standby means another running instance
+        // holds this machine's notification duty (no duplicate pushes).
+        match app.notifier_state() {
+            crate::notify::NotifierState::Active => spans.push(Span::styled(
                 format!("  {} notify on", theme.g_dot()),
                 Style::default().fg(theme.ok_color()),
-            ));
+            )),
+            crate::notify::NotifierState::Standby => spans.push(Span::styled(
+                format!("  {} notify standby", theme.g_dot()),
+                Style::default().fg(theme.dim()),
+            )),
+            crate::notify::NotifierState::Disabled => {}
         }
     }
     if app.paused {

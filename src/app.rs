@@ -225,6 +225,8 @@ pub struct App {
     notifier: crate::notify::Notifier,
     /// Short-lived notifier for the options-menu test push.
     test_notifier: Option<crate::notify::Notifier>,
+    /// Throttle for standby lock-takeover attempts.
+    standby_retry: Option<Instant>,
     pending_notifications: Vec<crate::notify::NotifyEvent>,
 }
 
@@ -251,6 +253,7 @@ impl App {
             notify_opts,
             notifier,
             test_notifier: None,
+            standby_retry: None,
             pending_notifications: Vec::new(),
         }
     }
@@ -350,6 +353,20 @@ impl App {
                 self.toast = None;
             }
         }
+        // Standby means another instance held notification duty. If it has
+        // exited, the flock is free - take over so a closed primary doesn't
+        // silently end notifications machine-wide.
+        if self.notifier.state() == crate::notify::NotifierState::Standby
+            && self.standby_retry.map_or(true, |t| t.elapsed() >= std::time::Duration::from_secs(10))
+        {
+            self.standby_retry = Some(Instant::now());
+            let n = crate::notify::Notifier::spawn(&self.notify_opts);
+            if n.state() == crate::notify::NotifierState::Active {
+                self.notifier = n;
+                self.toast_info("notification duty taken over (other instance closed)");
+            }
+        }
+
         // Dispatch detected transitions, filtered by the per-event toggles
         // in effect right now.
         for ev in self.pending_notifications.drain(..) {
@@ -1103,6 +1120,11 @@ impl App {
         self.notifier.is_active()
     }
 
+    /// Full notifier state, for the header indicator.
+    pub fn notifier_state(&self) -> crate::notify::NotifierState {
+        self.notifier.state()
+    }
+
     /// Read-only options state access (test support).
     pub fn options_ref(&self) -> Option<&OptionsState> {
         self.options.as_ref()
@@ -1286,7 +1308,9 @@ impl App {
         // master switch is off is a legitimate setup step.
         let mut probe = op.working.clone();
         probe.enabled = true;
-        let n = crate::notify::Notifier::spawn(&probe);
+        // No singleton lock: a test push is explicit user action, and the
+        // main notifier in this very process usually holds the lock.
+        let n = crate::notify::Notifier::spawn_with_lock(&probe, None);
         n.send(crate::notify::NotifyEvent {
             unit: String::new(),
             kind: crate::notify::EventKind::Test,
@@ -1304,6 +1328,10 @@ impl App {
         match crate::options::save(&working) {
             Ok(path) => {
                 self.notify_opts = working;
+                // Drop first: flock is per-process-wide on this file, and
+                // plain reassignment evaluates the new spawn (which tries to
+                // lock) BEFORE dropping the old holder - permanent standby.
+                self.notifier = crate::notify::Notifier::disabled();
                 self.notifier = crate::notify::Notifier::spawn(&self.notify_opts);
                 self.toast_ok(format!("saved {}", path.display()));
                 true

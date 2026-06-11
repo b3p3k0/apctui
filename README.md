@@ -122,6 +122,12 @@ per unit — with shutdown thresholds deliberately *more* conservative than the
 master's, so clients finish shutting down before the master cuts power — and
 writes a deploy bundle (config + install steps) to `~/apctui-client-bundles`.
 
+The master address prefills with **this host's detected private IP**
+(preferring 100.64/10, then 10/8, 172.16/12, 192.168/16 — overlay networks
+like Tailscale win), because the loopback address apctui itself polls means
+nothing to another machine. If no private address is found, the form warns
+loudly instead of letting you export a config that can't work.
+
 ## Notifications
 
 ![options](docs/screenshots/options.png)

@@ -6,6 +6,7 @@ pub mod app;
 pub mod clientgen;
 pub mod config;
 pub mod events;
+pub mod netutil;
 pub mod nis;
 pub mod notify;
 pub mod options;

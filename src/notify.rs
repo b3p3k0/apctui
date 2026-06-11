@@ -333,7 +333,10 @@ mod tests {
             cooldown_secs: 0,
             ..Default::default()
         };
-        let n = Notifier::spawn(&opts);
+        // No lock path: unit tests must not contend on the machine-global
+        // default lock (a running apctui instance would hold it and turn
+        // this into an environment-dependent failure).
+        let n = Notifier::spawn_with_lock(&opts, None);
         std::env::remove_var("APCTUI_PUSHBULLET_URL");
         assert!(n.is_active());
         n.send(NotifyEvent {

@@ -155,3 +155,38 @@ fn save_from_prompt_persists_and_closes() {
     std::env::remove_var("XDG_CONFIG_HOME");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn saving_twice_keeps_the_notifier_armed() {
+    // Regression: rebuilding on save must release this process's own lock
+    // before re-acquiring, or the instance strands itself in standby.
+    let dir = std::env::temp_dir().join(format!("apctui-resave-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::env::set_var("XDG_CONFIG_HOME", &dir);
+
+    let mut app = App::test_fixture(false);
+    open_options(&mut app);
+    key(&mut app, KeyCode::Char(' ')); // enable
+    // token
+    key(&mut app, KeyCode::Char('j'));
+    key(&mut app, KeyCode::Char('j'));
+    key(&mut app, KeyCode::Enter);
+    for c in "o.x".chars() {
+        key(&mut app, KeyCode::Char(c));
+    }
+    key(&mut app, KeyCode::Enter);
+    key(&mut app, KeyCode::Char('s'));
+    assert!(app.notifier_active(), "armed after first save");
+    // change cooldown, save again
+    for _ in 0..5 {
+        key(&mut app, KeyCode::Char('j'));
+    }
+    key(&mut app, KeyCode::Enter);
+    key(&mut app, KeyCode::Char('0'));
+    key(&mut app, KeyCode::Enter);
+    key(&mut app, KeyCode::Char('s'));
+    assert!(app.notifier_active(), "must stay armed across re-saves (lock re-acquired)");
+
+    std::env::remove_var("XDG_CONFIG_HOME");
+    std::fs::remove_dir_all(&dir).ok();
+}

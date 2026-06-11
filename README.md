@@ -142,6 +142,12 @@ What triggers a push — transitions only, never steady state:
 
 Every delivered push also confirms on screen as a toast, so you can tell
 detection from delivery problems at a glance.
+
+Run as many dashboards as you like — only **one instance per machine sends**
+(a file lock under `~/.config/apctui/`). The header shows which: the sender
+reads `notify on`, the rest `notify standby`. Close the sender and a standby
+instance takes over within ~10 seconds. Two machines watching the same units
+will still both send; the lock is per-machine, not per-fleet.
 Repeat events for the same unit are rate-limited (default 60 s, configurable).
 Delivery runs on a background thread; a dead network can't freeze the UI, and
 failures show up as a toast with the HTTP status.

@@ -1349,7 +1349,20 @@ impl App {
                 // plain reassignment evaluates the new spawn (which tries to
                 // lock) BEFORE dropping the old holder - permanent standby.
                 self.notifier = crate::notify::Notifier::disabled();
-                self.notifier = crate::notify::Notifier::spawn(&self.notify_opts);
+                // Reclaiming our own just-released lock: the OS release isn't
+                // always visible to an immediate re-acquire under load, which
+                // would strand us in standby until tick()'s 10s takeover. Retry
+                // briefly (resolves in a few ms) so re-arm is reliable. Bounded
+                // and save-action-only, so the UI thread isn't meaningfully held.
+                let mut n = crate::notify::Notifier::spawn(&self.notify_opts);
+                let start = Instant::now();
+                while n.state() == crate::notify::NotifierState::Standby
+                    && start.elapsed() < Duration::from_millis(50)
+                {
+                    std::thread::sleep(Duration::from_millis(2));
+                    n = crate::notify::Notifier::spawn(&self.notify_opts);
+                }
+                self.notifier = n;
                 self.toast_ok(format!("saved {}", path.display()));
                 true
             }

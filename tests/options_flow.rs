@@ -5,6 +5,8 @@
 
 use apctui::app::{App, View};
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Mutex;
 
 fn key(app: &mut App, code: KeyCode) {
     app.on_key(code, KeyModifiers::NONE);
@@ -12,6 +14,32 @@ fn key(app: &mut App, code: KeyCode) {
 
 fn open_options(app: &mut App) {
     app.test_open_options(apctui::options::Notifications::default());
+}
+
+// XDG_CONFIG_HOME is process-global and config_path() reads it, so two tests
+// pointing it at temp dirs in parallel clobber each other. Serialize the whole
+// set/use/restore window; unique dir per call so a failed cleanup can't leak
+// into the next test. Poison-tolerant so a panicking test doesn't strand the
+// rest on a poisoned lock.
+static XDG_LOCK: Mutex<()> = Mutex::new(());
+static XDG_SEQ: AtomicU32 = AtomicU32::new(0);
+
+fn with_xdg_home<F: FnOnce(&std::path::Path)>(f: F) {
+    let _guard = XDG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!(
+        "apctui-flow-{}-{}",
+        std::process::id(),
+        XDG_SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let old = std::env::var_os("XDG_CONFIG_HOME");
+    std::env::set_var("XDG_CONFIG_HOME", &dir);
+    f(&dir);
+    match old {
+        Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+        None => std::env::remove_var("XDG_CONFIG_HOME"),
+    }
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]
@@ -137,58 +165,47 @@ fn discard_closes_without_applying() {
 
 #[test]
 fn save_from_prompt_persists_and_closes() {
-    // isolate the config write
-    let dir = std::env::temp_dir().join(format!("apctui-prompt-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    std::env::set_var("XDG_CONFIG_HOME", &dir);
-
-    let mut app = App::test_fixture(false);
-    open_options(&mut app);
-    make_dirty(&mut app);
-    key(&mut app, KeyCode::Esc);
-    key(&mut app, KeyCode::Char('s'));
-    assert_eq!(app.view, View::Dashboard);
-    assert!(app.notify_opts.enabled, "saved change must reach live settings");
-    let written = std::fs::read_to_string(dir.join("apctui").join("config.toml")).unwrap();
-    assert!(written.contains("enabled = true"));
-
-    std::env::remove_var("XDG_CONFIG_HOME");
-    std::fs::remove_dir_all(&dir).ok();
+    with_xdg_home(|dir| {
+        let mut app = App::test_fixture(false);
+        open_options(&mut app);
+        make_dirty(&mut app);
+        key(&mut app, KeyCode::Esc);
+        key(&mut app, KeyCode::Char('s'));
+        assert_eq!(app.view, View::Dashboard);
+        assert!(app.notify_opts.enabled, "saved change must reach live settings");
+        let written = std::fs::read_to_string(dir.join("apctui").join("config.toml")).unwrap();
+        assert!(written.contains("enabled = true"));
+    });
 }
 
 #[test]
 fn saving_twice_keeps_the_notifier_armed() {
     // Regression: rebuilding on save must release this process's own lock
     // before re-acquiring, or the instance strands itself in standby.
-    let dir = std::env::temp_dir().join(format!("apctui-resave-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    std::env::set_var("XDG_CONFIG_HOME", &dir);
-
-    let mut app = App::test_fixture(false);
-    open_options(&mut app);
-    key(&mut app, KeyCode::Char(' ')); // enable
-    // token
-    key(&mut app, KeyCode::Char('j'));
-    key(&mut app, KeyCode::Char('j'));
-    key(&mut app, KeyCode::Enter);
-    for c in "o.x".chars() {
-        key(&mut app, KeyCode::Char(c));
-    }
-    key(&mut app, KeyCode::Enter);
-    key(&mut app, KeyCode::Char('s'));
-    assert!(app.notifier_active(), "armed after first save");
-    // change cooldown, save again
-    for _ in 0..5 {
+    with_xdg_home(|_dir| {
+        let mut app = App::test_fixture(false);
+        open_options(&mut app);
+        key(&mut app, KeyCode::Char(' ')); // enable
+        // token
         key(&mut app, KeyCode::Char('j'));
-    }
-    key(&mut app, KeyCode::Enter);
-    key(&mut app, KeyCode::Char('0'));
-    key(&mut app, KeyCode::Enter);
-    key(&mut app, KeyCode::Char('s'));
-    assert!(app.notifier_active(), "must stay armed across re-saves (lock re-acquired)");
-
-    std::env::remove_var("XDG_CONFIG_HOME");
-    std::fs::remove_dir_all(&dir).ok();
+        key(&mut app, KeyCode::Char('j'));
+        key(&mut app, KeyCode::Enter);
+        for c in "o.x".chars() {
+            key(&mut app, KeyCode::Char(c));
+        }
+        key(&mut app, KeyCode::Enter);
+        key(&mut app, KeyCode::Char('s'));
+        assert!(app.notifier_active(), "armed after first save");
+        // change cooldown, save again
+        for _ in 0..5 {
+            key(&mut app, KeyCode::Char('j'));
+        }
+        key(&mut app, KeyCode::Enter);
+        key(&mut app, KeyCode::Char('0'));
+        key(&mut app, KeyCode::Enter);
+        key(&mut app, KeyCode::Char('s'));
+        assert!(app.notifier_active(), "must stay armed across re-saves (lock re-acquired)");
+    });
 }
 
 #[test]

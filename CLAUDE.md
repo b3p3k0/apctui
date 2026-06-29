@@ -160,3 +160,18 @@ One daemon per UPS is apcupsd's model; everything follows from that.
   shipped a bug where typing "q" in a text field quit the view.
 - Duplicate notifications came from two running instances, not the code.
   When a bug won't reproduce, suspect the environment before the diff.
+- Tests that mutate a process-global env var (`XDG_CONFIG_HOME`, read by
+  `options::config_path` and the notifier lock path) race under default
+  parallel `cargo test` — green single-threaded, flaky in the suite. Fix:
+  a poison-tolerant `static Mutex` around the set/use/restore window and a
+  unique temp dir per call (an atomic counter, NOT bare `process::id()` —
+  that's constant across the binary). Helpers: `with_temp_home`
+  (src/options.rs), `with_xdg_home` (tests/options_flow.rs). Always run the
+  suite parallel; single-threaded hides this whole class.
+- flock release after closing the fd is NOT instantly visible to an
+  immediate re-acquire under load (~27% miss in the full suite). Never
+  assert instant lock takeover. Tests poll briefly; `App::options_save`
+  reclaims its own just-released lock with a bounded ~50ms retry so re-arm
+  is deterministic instead of stranding in standby until tick()'s 10s
+  takeover. The 10s takeover for *another* instance's lock stays as-is —
+  that one is correctly eventual.

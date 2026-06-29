@@ -5,7 +5,7 @@
 use super::widgets::{block, labeled_bar};
 use crate::app::App;
 use crate::theme::Theme;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::symbols;
@@ -13,12 +13,54 @@ use ratatui::widgets::{Axis, Chart, Dataset, GraphType, Paragraph};
 use ratatui::Frame;
 
 const CARD_MIN_H: u16 = 7;
+const CARD_MIN_W: u16 = 28;
 
 pub fn draw(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     if app.upses.is_empty() {
         frame.render_widget(Paragraph::new(" no UPS instances configured"), area);
         return;
     }
+    let n = app.upses.len();
+    // Grid layout for 1-4 units; 5+ goes straight to the compact table.
+    let (cols, rows) = match n {
+        1 => (1u16, 1u16),
+        2 => (2, 1),
+        3 | 4 => (2, 2),
+        _ => {
+            draw_compact(frame, area, app, theme);
+            return;
+        }
+    };
+    // Cells too cramped to render a real card: fall back to the full-width
+    // vertical stack (which itself collapses to compact when too short).
+    if area.width / cols < CARD_MIN_W || area.height / rows < CARD_MIN_H {
+        draw_stack(frame, area, app, theme);
+        return;
+    }
+    let row_areas = Layout::vertical(
+        (0..rows).map(|_| Constraint::Ratio(1, rows as u32)).collect::<Vec<_>>(),
+    )
+    .split(area);
+    for (r, row_area) in row_areas.iter().enumerate() {
+        let col_areas = Layout::horizontal(
+            (0..cols).map(|_| Constraint::Ratio(1, cols as u32)).collect::<Vec<_>>(),
+        )
+        .split(*row_area);
+        for (c, cell) in col_areas.iter().enumerate() {
+            let idx = r * cols as usize + c;
+            if idx < n {
+                draw_card(frame, *cell, app, idx, theme);
+            } else if n == 3 {
+                draw_placeholder(frame, *cell, theme);
+            }
+        }
+    }
+}
+
+/// Full-width vertical stack: one card per row, compact fallback when short.
+/// This is the pre-grid layout, kept as the degradation step for terminals
+/// too narrow or short for the grid.
+fn draw_stack(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     let n = app.upses.len() as u16;
     if area.height / n < CARD_MIN_H {
         draw_compact(frame, area, app, theme);
@@ -31,6 +73,26 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     for (i, row) in rows.iter().enumerate() {
         draw_card(frame, *row, app, i, theme);
     }
+}
+
+/// Empty quad cell (3-unit grid): bordered panel with a centered "no device".
+fn draw_placeholder(frame: &mut Frame, area: Rect, theme: &Theme) {
+    let blk = block(theme).border_style(Style::default().fg(theme.dim()));
+    let inner = blk.inner(area);
+    frame.render_widget(blk, area);
+    if inner.height == 0 {
+        return;
+    }
+    let pad = inner.height.saturating_sub(1) / 2;
+    let mut lines: Vec<Line> = (0..pad).map(|_| Line::from("")).collect();
+    lines.push(Line::from(Span::styled(
+        "no device",
+        Style::default().fg(theme.dim()),
+    )));
+    frame.render_widget(
+        Paragraph::new(lines).alignment(Alignment::Center),
+        inner,
+    );
 }
 
 fn fmt_opt(v: Option<f64>, suffix: &str) -> String {

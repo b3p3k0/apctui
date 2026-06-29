@@ -80,7 +80,96 @@ fn tiny_terminal_does_not_panic() {
 
 #[test]
 fn very_narrow_but_tall() {
-    let _ = render(View::Dashboard, false, 41, 50);
+    // Two units, too narrow for side-by-side: must fall back to the stack and
+    // still render both, no panic.
+    let out = render_grid(false, 41, 50, 2);
+    assert!(out.contains("rack-1"));
+    assert!(out.contains("rack-2"));
+}
+
+// ---- grid layout (1-4 cards) + 5+ compact fallback ----
+
+/// Render the dashboard with `n` synthetic ONLINE units named rack-1..rack-n.
+fn render_grid(basic: bool, w: u16, h: u16, n: usize) -> String {
+    use apctui::nis::UpsStatus;
+    use apctui::registry::UpsRef;
+    let mode = if basic { ColorMode::Mono } else { ColorMode::Truecolor };
+    let theme = Theme::new(mode, basic);
+    let refs: Vec<UpsRef> = (1..=n)
+        .map(|i| UpsRef { name: format!("rack-{i}"), addr: format!("127.0.0.1:{}", 3550 + i) })
+        .collect();
+    let mut app = App::new(&refs, basic, apctui::options::Notifications::default());
+    for panel in app.upses.iter_mut() {
+        let mut fields = std::collections::HashMap::new();
+        for (k, v) in [
+            ("STATUS", "ONLINE"), ("LINEV", "121.5 Volts"), ("LOADPCT", "42.0 Percent"),
+            ("BCHARGE", "93.0 Percent"), ("TIMELEFT", "22.0 Minutes"), ("BATTV", "27.3 Volts"),
+            ("NOMPOWER", "900 Watts"), ("MODEL", "Smart-UPS 1500"), ("NUMXFERS", "3"),
+        ] {
+            fields.insert(k.to_string(), v.to_string());
+        }
+        panel.status = Some(UpsStatus { fields });
+    }
+    app.test_set_view(View::Dashboard);
+    let backend = TestBackend::new(w, h);
+    let mut term = Terminal::new(backend).unwrap();
+    term.draw(|f| ui::draw(f, &app, &theme)).unwrap();
+    let buf = term.backend().buffer().clone();
+    let mut s = String::new();
+    for cell in buf.content() {
+        s.push_str(cell.symbol());
+    }
+    s
+}
+
+/// y of the first row in a w×h buffer string that contains `needle`. The
+/// buffer string is one char per cell in row-major order, so chunk by chars
+/// (box-drawing symbols are multi-byte, so byte-chunking would misalign).
+fn row_of(out: &str, w: u16, needle: &str) -> Option<usize> {
+    let chars: Vec<char> = out.chars().collect();
+    chars
+        .chunks(w as usize)
+        .position(|row| row.iter().collect::<String>().contains(needle))
+}
+
+#[test]
+fn two_units_render_side_by_side() {
+    let w = 100u16;
+    let out = render_grid(false, w, 30, 2);
+    assert!(out.contains("rack-1"));
+    assert!(out.contains("rack-2"));
+    // Both card titles sit on the same top-border row -> two columns, not rows.
+    assert_eq!(row_of(&out, w, "rack-1"), row_of(&out, w, "rack-2"));
+    assert_ascii("grid 2-up", &render_grid(true, w, 30, 2));
+}
+
+#[test]
+fn three_units_show_no_device_placeholder() {
+    let out = render_grid(false, 100, 30, 3);
+    for i in 1..=3 {
+        assert!(out.contains(&format!("rack-{i}")));
+    }
+    assert!(out.contains("no device"));
+    assert_ascii("grid 3-up", &render_grid(true, 100, 30, 3));
+}
+
+#[test]
+fn four_units_fill_quad() {
+    let out = render_grid(false, 100, 30, 4);
+    for i in 1..=4 {
+        assert!(out.contains(&format!("rack-{i}")));
+    }
+    assert!(!out.contains("no device"));
+    assert_ascii("grid 4-up", &render_grid(true, 100, 30, 4));
+}
+
+#[test]
+fn five_units_fall_back_to_compact() {
+    let out = render_grid(false, 100, 40, 5);
+    // Compact table header is present; grid declined.
+    assert!(out.contains("name"));
+    assert!(out.contains("runtime"));
+    assert!(!out.contains("no device"));
 }
 
 // ---- stateful views: editor, services, clientgen ----
@@ -186,12 +275,29 @@ fn paused_header_ascii_in_basic() {
 
 #[test]
 fn history_chart_is_right_anchored() {
-    // Fixture history (50 samples) is narrower than the chart window (~96
-    // cols at width 100), so a partially-filled chart must hug the RIGHT
-    // edge — btop convention — leaving the left side empty.
-    let mode = ColorMode::Truecolor;
-    let theme = Theme::new(mode, false);
-    let mut app = App::test_fixture(false);
+    // A single unit fills the dashboard width, so the chart window is ~96 cols.
+    // Its 50 samples of history are narrower than that, so a partially-filled
+    // chart must hug the RIGHT edge — btop convention — leaving the left empty.
+    // (Single unit on purpose: the grid layout makes a 2-up card half-width,
+    // which would move these coordinates; the anchor logic is the same.)
+    use apctui::nis::UpsStatus;
+    use apctui::registry::UpsRef;
+    let theme = Theme::new(ColorMode::Truecolor, false);
+    let refs = [UpsRef { name: "rack-main".into(), addr: "127.0.0.1:3551".into() }];
+    let mut app = App::new(&refs, false, apctui::options::Notifications::default());
+    let mut fields = std::collections::HashMap::new();
+    for (k, v) in [
+        ("STATUS", "ONLINE"), ("LINEV", "121.5 Volts"), ("LOADPCT", "42.0 Percent"),
+        ("BCHARGE", "93.0 Percent"), ("TIMELEFT", "22.0 Minutes"), ("BATTV", "27.3 Volts"),
+        ("NOMPOWER", "900 Watts"), ("MODEL", "Smart-UPS 1500"), ("NUMXFERS", "3"),
+    ] {
+        fields.insert(k.to_string(), v.to_string());
+    }
+    app.upses[0].status = Some(UpsStatus { fields });
+    for i in 0..50u64 {
+        app.upses[0].load_hist.push_back(30 + i % 20);
+        app.upses[0].batt_hist.push_back(90 + i % 10);
+    }
     app.test_set_view(View::Dashboard);
     let backend = TestBackend::new(100, 26);
     let mut term = Terminal::new(backend).unwrap();

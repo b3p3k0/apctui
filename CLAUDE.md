@@ -123,9 +123,14 @@ One daemon per UPS is apcupsd's model; everything follows from that.
 
 ## Git workflow
 
-- Never commit to `main`. Branch per change (`fix/...`, `feat/...`,
-  `docs/...`), PR via `gh pr create --fill --web`, owner reviews and
-  merges in the web UI, delete branches after merge.
+- Local solo dev (current): commit straight to `main` with a clean
+  conventional message; the owner pushes (agent pushes are blocked). No
+  branch-per-change, no PRs. If the repo goes collaborative again, switch
+  back to: branch per change (`fix/...`, `feat/...`, `docs/...`), PR via
+  `gh pr create --fill --web`, owner reviews and merges in the web UI,
+  delete branches after merge.
+- Never amend or force-push commits already pushed; stage files by name,
+  not `git add -A`.
 - Commit messages: conventional-ish prefix, body explains the why and
   states how it was verified. Read `git log` for the house style.
 - When behavior changes, update README in the same commit. Screenshots

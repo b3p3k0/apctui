@@ -93,9 +93,24 @@ pub fn save(n: &Notifications) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Mutex;
+
+    // XDG_CONFIG_HOME is process-global and config_path() reads it, so two
+    // tests setting it in parallel clobber each other. Serialize the whole
+    // set/use/restore window. Poison-tolerant: a panicking test must not
+    // cascade-fail the rest by leaving the lock poisoned.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    // Unique dir per call so a failed cleanup can't leak into the next test.
+    static SEQ: AtomicU32 = AtomicU32::new(0);
 
     fn with_temp_home<F: FnOnce()>(f: F) {
-        let dir = std::env::temp_dir().join(format!("apctui-opt-{}", std::process::id()));
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!(
+            "apctui-opt-{}-{}",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let old = std::env::var_os("XDG_CONFIG_HOME");
         std::env::set_var("XDG_CONFIG_HOME", &dir);

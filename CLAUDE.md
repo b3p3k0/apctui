@@ -43,8 +43,10 @@ One daemon per UPS is apcupsd's model; everything follows from that.
   drain updates → `app.apply()` → `app.tick()` → draw → key input.
 - `src/app.rs` — all state and key handling. `UpsPanel` per unit (status,
   history, notification baselines). Views: Dashboard, Detail, Editor,
-  Services, ClientGen, Events, Options, Help. Editor and ClientGen are
-  tabbed (one tab per instance/unit).
+  Services, ClientGen, Events, Options, Units, Help. Editor and ClientGen
+  are tabbed (one tab per instance/unit). Units (`u`) adds/removes LAN
+  endpoints — writes `[[ups]]` via `options::add_ups`/`remove_ups`, applied
+  on restart (no live poller spawn).
 - `src/poller.rs` — background NIS polling, `Update` over mpsc.
 - `src/nis.rs` — apcupsd NIS protocol client (length-prefixed records).
 - `src/config/` — apcupsd.conf parser (byte-exact round-trip: comments,
@@ -56,8 +58,11 @@ One daemon per UPS is apcupsd's model; everything follows from that.
   ignores SIGHUP. The TUI itself never runs as root.
 - `src/service.rs` — instance discovery from `/etc/apcupsd/*.conf`
   (excludes `apcupsd`, `hosts`, `multimon`), systemd control.
-- `src/registry.rs` — unit resolution: CLI `--ups` flags > config file
-  `[[ups]]` > discovery, with `[discovery] ignore` list support.
+- `src/registry.rs` — unit resolution: CLI `--ups` flags override; otherwise
+  local `/etc/apcupsd` discovery is MERGED with config `[[ups]]` entries
+  (config wins on name collision), with `[discovery] ignore` applied to
+  discovered units. The merge is what lets in-app LAN units coexist with
+  auto-detected local ones.
 - `src/clientgen.rs` + `src/netutil.rs` — network-client config generator.
   Master address prefills this host's detected private IP; priority
   100.64/10 > 10/8 > 172.16/12 > 192.168/16 (overlay networks win, per

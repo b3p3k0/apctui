@@ -50,7 +50,9 @@ apctui --basic    # force pure ASCII (no color blocks)
 apctui --probe    # one‑shot status dump of all units, no TUI
 ```
 
-To monitor remote hosts, or hide units you don’t care about, create `~/.config/apctui/config.toml` (see `examples/apctui.toml` in the repo) and define additional `[ups]` entries or mark existing ones as `hidden = true`.
+Local instances are auto-detected. To add UPSs on other LAN hosts, use the
+Units view (`u`) described below, or hand-edit `~/.config/apctui/config.toml`
+(see `examples/apctui.toml`).
 
 ### Keyboard shortcuts
 
@@ -62,10 +64,31 @@ To monitor remote hosts, or hide units you don’t care about, create `~/.config
 | `s`         | service control (start/stop/enable…)     |
 | `g`         | generate client config bundle            |
 | `o`         | notification options                     |
+| `u`         | manage LAN units (add/remove)            |
 | `e`         | view event log                           |
 | `b`         | toggle ASCII mode on the fly             |
 | `p`         | pause/resume polling                     |
 | `q`         | quit                                     |
+
+## Monitoring LAN / remote UPSs
+
+apcupsd runs one daemon per host. If a second UPS powers a different machine on
+your network, that machine runs its own apcupsd — apctui just reads its status
+over the network. A remote unit is nothing more than a NIS endpoint
+(`host:port`); a local one is `127.0.0.1:3551`, a LAN one is its host’s IP.
+
+Press `u` for the Units view. It lists every monitored unit, tagged **local
+(auto)** for ones discovered in `/etc/apcupsd` or **LAN (config)** for ones you
+added. Press `a` to add: enter a name and `host` (or `host:port` — the port
+defaults to 3551). Press `x` to remove a unit you added; auto-detected local
+units aren’t removable here. Entries are written to the `[[ups]]` section of
+`~/.config/apctui/config.toml` (your comments and other settings are left
+untouched) and **take effect the next time you start apctui** — the view shows
+them tagged “pending” until then.
+
+Two things on the remote host: its apcupsd must have `NETSERVER on`, and its
+NIS port (3551 by default) must be reachable through any firewall. If a unit
+can’t be reached after restart, it shows the red `COMMLOST` badge.
 
 ## Configuration editing
 

@@ -445,3 +445,62 @@ fn clientgen_warns_on_loopback_master() {
     let non_ascii: Vec<char> = basic.chars().filter(|c| !c.is_ascii()).collect();
     assert!(non_ascii.is_empty(), "warning leaked non-ASCII: {:?}", non_ascii.iter().take(8).collect::<String>());
 }
+
+// ---- units view ----
+
+#[test]
+fn units_view_renders_and_is_ascii_in_basic() {
+    use apctui::app::{UnitKind, UnitRow, UnitsState};
+    let build = |a: &mut App| {
+        a.units = Some(UnitsState {
+            rows: vec![
+                UnitRow { name: "rack-main".into(), addr: "127.0.0.1:3551".into(), kind: UnitKind::Local, pending: false },
+                UnitRow { name: "rack-lan".into(), addr: "192.168.1.50:3551".into(), kind: UnitKind::Config, pending: true },
+            ],
+            cursor: 0,
+            form: None,
+            confirm_remove: None,
+        });
+        a.test_set_view(View::Units);
+    };
+    let out = render_with(false, 100, 24, build);
+    assert!(out.contains("rack-lan"));
+    assert!(out.contains("local (auto)"));
+    assert!(out.contains("LAN (config)"));
+    assert!(out.contains("pending"));
+    assert!(out.contains("changes apply after restart"));
+    let basic = render_with(true, 100, 24, build);
+    assert_ascii("units basic", &basic);
+}
+
+#[test]
+fn units_add_form_and_remove_confirm_render_ascii() {
+    use apctui::app::{AddField, AddForm, UnitKind, UnitRow, UnitsState};
+    let form = |a: &mut App| {
+        a.units = Some(UnitsState {
+            rows: vec![],
+            cursor: 0,
+            form: Some(AddForm { field: AddField::Host, name: "rack-lan".into(), host: "192.168.1.50".into() }),
+            confirm_remove: None,
+        });
+        a.test_set_view(View::Units);
+    };
+    let out = render_with(false, 100, 24, form);
+    assert!(out.contains("Add LAN UPS"));
+    assert!(out.contains("rack-lan"));
+    assert_ascii("units add form basic", &render_with(true, 100, 24, form));
+
+    let confirm = |a: &mut App| {
+        a.units = Some(UnitsState {
+            rows: vec![UnitRow { name: "rack-lan".into(), addr: "192.168.1.50:3551".into(), kind: UnitKind::Config, pending: false }],
+            cursor: 0,
+            form: None,
+            confirm_remove: Some("rack-lan".into()),
+        });
+        a.test_set_view(View::Units);
+    };
+    let out = render_with(false, 100, 24, confirm);
+    assert!(out.contains("Remove unit"));
+    assert!(out.contains("rack-lan"));
+    assert_ascii("units remove confirm basic", &render_with(true, 100, 24, confirm));
+}

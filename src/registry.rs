@@ -24,6 +24,8 @@ pub enum Source {
     ConfigFile,
     UserConfig,
     Discovered,
+    /// Discovered local units unioned with config `[[ups]]` entries.
+    Merged { local: usize, config: usize },
     Fallback,
 }
 
@@ -35,6 +37,9 @@ impl Source {
             Source::ConfigFile => format!("{n} {unit} from --config file"),
             Source::UserConfig => format!("{n} {unit} from ~/.config/apctui/config.toml"),
             Source::Discovered => format!("discovered {n} {unit} in /etc/apcupsd"),
+            Source::Merged { local, config } => {
+                format!("{n} units: {local} local + {config} configured")
+            }
             Source::Fallback => "no config found; trying 127.0.0.1:3551".to_string(),
         }
     }
@@ -105,6 +110,40 @@ fn discovery_ignore() -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// `[[ups]]` entries from the user config file (empty if none / no file).
+/// These are the units manageable in-app via the Units view.
+pub fn configured_ups() -> Vec<UpsRef> {
+    default_config_path()
+        .filter(|p| p.exists())
+        .and_then(|p| load_file(&p).ok())
+        .unwrap_or_default()
+}
+
+/// Local apcupsd instances discovered by scanning /etc/apcupsd/*.conf, each
+/// resolved to its NIS endpoint. Excludes the stock single-instance unit.
+fn discover_locals() -> Vec<UpsRef> {
+    crate::service::discover()
+        .into_iter()
+        .filter(|inst| inst.name != "apcupsd")
+        .filter_map(|inst| inst.nis_addr.map(|addr| UpsRef { name: inst.name, addr }))
+        .collect()
+}
+
+/// Union discovered local units with config `[[ups]]` entries. Discovered
+/// units in the `ignore` list are dropped; on a name collision the config
+/// entry wins (it's the explicit choice). Locals come first, then config.
+fn merge(discovered: Vec<UpsRef>, configured: Vec<UpsRef>, ignore: &[String]) -> Vec<UpsRef> {
+    use std::collections::HashSet;
+    let config_names: HashSet<&str> = configured.iter().map(|u| u.name.as_str()).collect();
+    let mut out: Vec<UpsRef> = discovered
+        .into_iter()
+        .filter(|d| !ignore.iter().any(|i| i == &d.name))
+        .filter(|d| !config_names.contains(d.name.as_str()))
+        .collect();
+    out.extend(configured);
+    out
+}
+
 pub fn resolve(cli_ups: &[String], cli_config: Option<&Path>) -> Result<Vec<UpsRef>> {
     resolve_with_source(cli_ups, cli_config).map(|(list, _)| list)
 }
@@ -113,43 +152,43 @@ pub fn resolve_with_source(
     cli_ups: &[String],
     cli_config: Option<&Path>,
 ) -> Result<(Vec<UpsRef>, Source)> {
+    // CLI flags are an explicit override and never merge.
     if !cli_ups.is_empty() {
         let list: Result<Vec<_>> = cli_ups.iter().map(|s| parse_cli_ups(s)).collect();
         return Ok((list?, Source::CliFlags));
     }
-    if let Some(path) = cli_config {
-        let list = load_file(path)?;
-        if list.is_empty() {
-            bail!("{} defines no [[ups]] entries", path.display());
-        }
-        return Ok((list, Source::ConfigFile));
-    }
-    if let Some(path) = default_config_path() {
-        if path.exists() {
-            let list = load_file(&path)?;
-            if !list.is_empty() {
-                return Ok((list, Source::UserConfig));
-            }
-        }
-    }
 
-    // No flags and no apctui config: discover locally-configured instances by
-    // scanning /etc/apcupsd/*.conf. This is the common case after install.sh,
-    // which writes per-instance configs but no apctui TOML. Each instance's
-    // NIS endpoint is derived from its NISIP/NISPORT.
+    // Configured [[ups]]: an explicit --config file must parse; the default
+    // path is optional. These are merged with local discovery rather than
+    // replacing it, so a hand-added LAN unit doesn't hide local ones.
+    let (configured, explicit_config) = if let Some(path) = cli_config {
+        (load_file(path)?, true)
+    } else if let Some(path) = default_config_path().filter(|p| p.exists()) {
+        (load_file(&path).unwrap_or_default(), false)
+    } else {
+        (Vec::new(), false)
+    };
+
     let ignore = discovery_ignore();
-    let discovered: Vec<UpsRef> = crate::service::discover()
-        .into_iter()
-        .filter(|inst| inst.name != "apcupsd") // skip the stock single-instance unit
-        .filter(|inst| !ignore.iter().any(|i| i == &inst.name))
-        .filter_map(|inst| {
-            inst.nis_addr.map(|addr| UpsRef { name: inst.name, addr })
-        })
-        .collect();
-    if !discovered.is_empty() {
-        return Ok((discovered, Source::Discovered));
+    let merged = merge(discover_locals(), configured.clone(), &ignore);
+    if !merged.is_empty() {
+        let config = configured.len();
+        let local = merged.len() - config;
+        let source = match (local, config) {
+            (0, _) if explicit_config => Source::ConfigFile,
+            (0, _) => Source::UserConfig,
+            (_, 0) => Source::Discovered,
+            _ => Source::Merged { local, config },
+        };
+        return Ok((merged, source));
     }
 
+    if explicit_config {
+        bail!(
+            "{} defines no [[ups]] entries and no local instances were found",
+            cli_config.unwrap().display()
+        );
+    }
     Ok((
         vec![UpsRef {
             name: "local".to_string(),
@@ -173,6 +212,45 @@ mod tests {
     #[test]
     fn cli_spec_rejects_missing_port() {
         assert!(parse_cli_ups("rack-main=10.0.0.5").is_err());
+    }
+
+    fn r(name: &str, addr: &str) -> UpsRef {
+        UpsRef { name: name.into(), addr: addr.into() }
+    }
+    fn names(v: &[UpsRef]) -> Vec<&str> {
+        v.iter().map(|u| u.name.as_str()).collect()
+    }
+
+    #[test]
+    fn merge_unions_locals_first_then_config() {
+        let disc = vec![r("apc0", "127.0.0.1:3551"), r("apc1", "127.0.0.1:3552")];
+        let cfg = vec![r("rack-lan", "192.168.1.50:3551")];
+        let out = merge(disc, cfg, &[]);
+        assert_eq!(names(&out), ["apc0", "apc1", "rack-lan"]);
+    }
+
+    #[test]
+    fn merge_config_wins_on_name_collision() {
+        let disc = vec![r("apc0", "127.0.0.1:3551"), r("apc1", "127.0.0.1:3552")];
+        let cfg = vec![r("apc1", "10.0.0.9:3551")]; // same name, different addr
+        let out = merge(disc, cfg, &[]);
+        assert_eq!(names(&out), ["apc0", "apc1"]);
+        // the surviving apc1 is the config one
+        assert_eq!(out.iter().find(|u| u.name == "apc1").unwrap().addr, "10.0.0.9:3551");
+    }
+
+    #[test]
+    fn merge_ignore_applies_to_discovered_only() {
+        let disc = vec![r("apc0", "127.0.0.1:3551"), r("apc1", "127.0.0.1:3552")];
+        let cfg = vec![r("rack-lan", "192.168.1.50:3551")];
+        let out = merge(disc, cfg, &["apc0".to_string()]);
+        assert_eq!(names(&out), ["apc1", "rack-lan"]);
+    }
+
+    #[test]
+    fn merge_empty_config_is_discovery() {
+        let disc = vec![r("apc0", "127.0.0.1:3551")];
+        assert_eq!(names(&merge(disc.clone(), vec![], &[])), ["apc0"]);
     }
 
     #[test]

@@ -90,6 +90,80 @@ pub fn save(n: &Notifications) -> Result<PathBuf> {
     Ok(path)
 }
 
+/// Normalize and validate a NIS endpoint. A bare host gets the default
+/// :3551 port. Returns the normalized `HOST:PORT` or a user-facing error.
+pub fn validate_addr(input: &str) -> std::result::Result<String, String> {
+    let s = input.trim();
+    if s.is_empty() {
+        return Err("host is required".into());
+    }
+    let addr = if s.contains(':') { s.to_string() } else { format!("{s}:3551") };
+    let (host, port) = addr.rsplit_once(':').unwrap(); // addr now always has ':'
+    if host.is_empty() {
+        return Err("host is required".into());
+    }
+    if port.parse::<u16>().is_err() {
+        return Err(format!("invalid port `{port}` (expected 1-65535)"));
+    }
+    Ok(addr)
+}
+
+/// Append a `[[ups]]` entry to the config file, preserving everything else
+/// byte-for-byte (comments, [notifications], sibling entries). Rejects a
+/// duplicate name or a malformed address. Returns the file path.
+pub fn add_ups(name: &str, addr: &str) -> Result<PathBuf> {
+    let name = name.trim();
+    if name.is_empty() {
+        anyhow::bail!("name is required");
+    }
+    let addr = validate_addr(addr).map_err(|e| anyhow::anyhow!(e))?;
+
+    let path = config_path().context("cannot determine config path (no HOME)")?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    }
+    let raw = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut doc: toml_edit::DocumentMut = raw
+        .parse()
+        .with_context(|| format!("parsing {}", path.display()))?;
+
+    let item = &mut doc["ups"];
+    if !item.is_array_of_tables() {
+        *item = toml_edit::Item::ArrayOfTables(toml_edit::ArrayOfTables::new());
+    }
+    let arr = item.as_array_of_tables_mut().expect("ups is an array-of-tables");
+    if arr.iter().any(|t| t.get("name").and_then(|v| v.as_str()) == Some(name)) {
+        anyhow::bail!("a unit named `{name}` already exists");
+    }
+    let mut tbl = toml_edit::Table::new();
+    tbl["name"] = toml_edit::value(name);
+    tbl["addr"] = toml_edit::value(addr.as_str());
+    arr.push(tbl);
+
+    std::fs::write(&path, doc.to_string()).with_context(|| format!("writing {}", path.display()))?;
+    Ok(path)
+}
+
+/// Remove the `[[ups]]` entry with the given name. Returns whether one was
+/// removed. Preserves everything else in the file.
+pub fn remove_ups(name: &str) -> Result<bool> {
+    let path = config_path().context("cannot determine config path (no HOME)")?;
+    let Ok(raw) = std::fs::read_to_string(&path) else { return Ok(false) };
+    let mut doc: toml_edit::DocumentMut = raw
+        .parse()
+        .with_context(|| format!("parsing {}", path.display()))?;
+    let Some(arr) = doc["ups"].as_array_of_tables_mut() else { return Ok(false) };
+    let Some(i) = arr
+        .iter()
+        .position(|t| t.get("name").and_then(|v| v.as_str()) == Some(name))
+    else {
+        return Ok(false);
+    };
+    arr.remove(i);
+    std::fs::write(&path, doc.to_string()).with_context(|| format!("writing {}", path.display()))?;
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,6 +241,63 @@ mod tests {
             let path = save(&n).unwrap();
             let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600);
+        });
+    }
+
+    #[test]
+    fn validate_addr_normalizes_and_rejects() {
+        assert_eq!(validate_addr("192.168.1.5").unwrap(), "192.168.1.5:3551");
+        assert_eq!(validate_addr(" 10.0.0.9:3552 ").unwrap(), "10.0.0.9:3552");
+        assert!(validate_addr("").is_err());
+        assert!(validate_addr("host:notaport").is_err());
+        assert!(validate_addr(":3551").is_err());
+    }
+
+    #[test]
+    fn add_ups_appends_and_preserves_siblings_and_comments() {
+        with_temp_home(|| {
+            let path = config_path().unwrap();
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(
+                &path,
+                "# header\n[notifications]\nenabled = true\n\n[[ups]]\nname = \"rack-main\"  # local\naddr = \"127.0.0.1:3551\"\n",
+            )
+            .unwrap();
+
+            add_ups("rack-lan", "192.168.1.50:3551").unwrap();
+            let after = std::fs::read_to_string(&path).unwrap();
+            assert!(after.contains("# header"), "comment lost: {after}");
+            assert!(after.contains("# local"), "inline comment lost");
+            assert!(after.contains("rack-main"));
+            assert!(after.contains("rack-lan"));
+            assert!(after.contains("192.168.1.50:3551"));
+            assert!(after.contains("[notifications]"));
+
+            // a bare host gets the default port
+            add_ups("shed", "192.168.1.71").unwrap();
+            assert!(std::fs::read_to_string(&path).unwrap().contains("192.168.1.71:3551"));
+        });
+    }
+
+    #[test]
+    fn add_ups_rejects_duplicate_name() {
+        with_temp_home(|| {
+            add_ups("dup", "10.0.0.1:3551").unwrap();
+            assert!(add_ups("dup", "10.0.0.2:3551").is_err());
+        });
+    }
+
+    #[test]
+    fn remove_ups_drops_entry_and_reports() {
+        with_temp_home(|| {
+            add_ups("a", "10.0.0.1:3551").unwrap();
+            add_ups("b", "10.0.0.2:3551").unwrap();
+            assert!(remove_ups("a").unwrap());
+            assert!(!remove_ups("missing").unwrap());
+            let path = config_path().unwrap();
+            let after = std::fs::read_to_string(&path).unwrap();
+            assert!(!after.contains("\"a\""), "removed entry still present: {after}");
+            assert!(after.contains("\"b\""));
         });
     }
 }

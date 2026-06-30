@@ -41,7 +41,13 @@ One daemon per UPS is apcupsd's model; everything follows from that.
 
 - `src/main.rs` — CLI (clap), poller spawn (one thread per unit), event loop:
   drain updates → `app.apply()` → `app.tick()` → draw → key input.
-- `src/app.rs` — all state and key handling. `UpsPanel` per unit (status,
+- `src/app/` — all state and key handling, split per view to keep files
+  small. `mod.rs` holds the `App` struct, shared state structs, `new`/
+  `apply`/`tick`, the `on_key` dispatcher, dashboard/detail/events, and
+  cross-cutting test support; each view's handlers live in
+  `app/{editor,services,clientgen,options,units}.rs` as `impl App` blocks
+  (dispatched methods are `pub(super)`). **Convention: a new view = a new
+  `app/<view>.rs`, not more lines in `mod.rs`.** `UpsPanel` per unit (status,
   history, notification baselines). Views: Dashboard, Detail, Editor,
   Services, ClientGen, Events, Options, Units, Help. Editor and ClientGen
   are tabbed (one tab per instance/unit). Units (`u`) adds/removes LAN
